@@ -1,84 +1,68 @@
 // react-popup-src/src/App.jsx
 import React, { useState, useEffect } from 'react';
+import ManageFlashcards from './ManageFlashcards'; // Import the new component
 
 // --- Start: IndexedDB Logic (Copied & adapted from db.js for now) ---
+// KEEP THE INDEXEDDB LOGIC HERE AS WELL FOR THE CREATE VIEW
 const DB_NAME = 'flashcardDB';
 const DB_VERSION = 1;
 const STORE_NAME = 'flashcards';
-
-let dbPromise = null; // Store the promise for opening the DB
-
+let dbPromise = null;
 function openDB() {
-    if (!dbPromise) {
-        console.log(`Attempting to open DB: ${DB_NAME} version ${DB_VERSION}`);
-        dbPromise = new Promise((resolve, reject) => {
-            const request = indexedDB.open(DB_NAME, DB_VERSION);
-
-            request.onupgradeneeded = (event) => {
-                console.log('Database upgrade needed or first-time setup.');
-                const tempDb = event.target.result;
-                if (!tempDb.objectStoreNames.contains(STORE_NAME)) {
-                    console.log(`Creating object store: ${STORE_NAME}`);
-                    tempDb.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
-                    console.log('Object store created successfully.');
-                }
-            };
-
-            request.onsuccess = (event) => {
-                const db = event.target.result;
-                console.log(`Database "${DB_NAME}" opened successfully (version ${db.version}).`);
-                db.onerror = (errorEvent) => { // Add a generic error handler on the connection
-                     console.error("Database connection error:", errorEvent.target.error);
-                     dbPromise = null; // Reset promise on connection error
-                };
-                 // Handle closing unexpectedly
-                db.onclose = () => {
-                    console.warn('Database connection closed.');
-                    dbPromise = null; // Allow reopening
-                };
-                resolve(db);
-            };
-
-            request.onerror = (event) => {
-                console.error("Error opening database:", event.target.error);
-                 dbPromise = null; // Reset promise on error
-                reject(event.target.error);
-            };
-
-            request.onblocked = (event) => {
-                 console.warn("Database open request blocked.");
-                 dbPromise = null; // Reset promise on block
-                 reject(new Error("Database connection blocked. Close other tabs/windows."));
+    if (dbPromise) return dbPromise;
+    console.log(`App: Attempting to open DB: ${DB_NAME} version ${DB_VERSION}`);
+    dbPromise = new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        request.onupgradeneeded=(e)=>{/* ... same as before ... */
+            console.log('App: Database upgrade needed or first-time setup.');
+            const tempDb = e.target.result;
+            if (!tempDb.objectStoreNames.contains(STORE_NAME)) {
+                console.log(`App: Creating object store: ${STORE_NAME}`);
+                tempDb.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
+                console.log('App: Object store created successfully.');
             }
-        });
-    }
+        };
+        request.onsuccess=(e)=>{/* ... same as before ... */
+             const db = e.target.result;
+            console.log(`App: Database "${DB_NAME}" opened successfully (version ${db.version}).`);
+            db.onerror=(errEvent)=>{console.error("App: DB connection error:",errEvent.target.error);dbPromise=null;};
+            db.onclose=()=>{console.warn('App: DB connection closed.');dbPromise=null;};
+            resolve(db);
+        };
+        request.onerror=(e)=>{console.error("App: Error opening DB:",e.target.error);dbPromise=null;reject(e.target.error);};
+        request.onblocked=(e)=>{console.warn("App: DB open blocked.");dbPromise=null;reject(new Error("DB blocked"));}
+    });
     return dbPromise;
 }
 // --- End: IndexedDB Logic ---
 
 
 function App() {
+  // --- State for view management ---
+  const [view, setView] = useState('create'); // 'create' or 'manage'
+
+  // --- State for Create View ---
   const [selectedText, setSelectedText] = useState('');
   const [backText, setBackText] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [saveStatus, setSaveStatus] = useState(''); // For save feedback
+  const [isCreateLoading, setIsCreateLoading] = useState(true);
+  const [createError, setCreateError] = useState('');
+  const [saveStatus, setSaveStatus] = useState('');
 
-  // --- Effect for fetching selected text (same as before) ---
+  // --- Effect for fetching selected text (runs only for 'create' view conceptually) ---
   useEffect(() => {
-    // Make sure DB is ready when popup opens (optional, pre-opens connection)
+    // Pre-open DB on initial load
     openDB().catch(err => {
         console.error("Initial DB open failed:", err);
-        setError("Could not connect to database."); // Show DB error
+        setCreateError("Could not connect to database.");
     });
 
-    // Fetch selected text
+    setIsCreateLoading(true); // Set loading true when effect runs
     if (chrome && chrome.runtime && chrome.runtime.sendMessage) {
       chrome.runtime.sendMessage({ type: "GET_SELECTED_TEXT" }, (response) => {
         if (chrome.runtime.lastError) {
           console.error("Error getting selected text:", chrome.runtime.lastError.message);
-          setError(`Error: ${chrome.runtime.lastError.message}`);
-          setIsLoading(false);
+          setCreateError(`Error: ${chrome.runtime.lastError.message}`);
+          setIsCreateLoading(false);
           return;
         }
         if (response && typeof response.text === 'string') {
@@ -86,122 +70,111 @@ function App() {
         } else {
           setSelectedText('');
         }
-        setIsLoading(false);
+        setIsCreateLoading(false);
       });
     } else {
-      setError("Extension environment error.");
-      setIsLoading(false);
+      setCreateError("Extension environment error.");
+      setIsCreateLoading(false);
     }
-  }, []);
+  }, []); // Runs once when the popup initially mounts
 
-
-  // --- Function to handle saving the flashcard ---
+  // --- handleSave function (remains the same) ---
   const handleSave = async () => {
-    if (!selectedText || !backText.trim()) {
-      setSaveStatus('Front or back text missing.');
-      return;
-    }
-
-    setSaveStatus('Saving...'); // Indicate saving process
-
-    /*
-     * Expected Flashcard Structure:
-     * {
-     *   id?: number, // Auto-generated by IndexedDB
-     *   front: string,
-     *   back: string,
-     *   notes?: string,
-     *   tags?: string[],
-     *   hintImage?: string, // URL or maybe base64 data
-     *   bucket: number // Starting bucket for Leitner system
-     * }
-     */
-    const newFlashcard = {
-        front: selectedText,
-        back: backText.trim(),
-        bucket: 1, // Default starting bucket
-        // Add other fields like notes, tags later if needed
-        createdAt: new Date().toISOString() // Optional: track creation time
-    };
-
-    try {
-        const db = await openDB(); // Get the DB instance (reuses the promise)
-        const transaction = db.transaction(STORE_NAME, 'readwrite');
-        const store = transaction.objectStore(STORE_NAME);
-
-        const request = store.add(newFlashcard);
-
-        request.onsuccess = () => {
-            console.log('Flashcard added successfully!', request.result); // request.result is the new ID
-            setSaveStatus(`Flashcard saved! (ID: ${request.result})`);
-            setBackText(''); // Clear input field
-            // Optionally close the popup after successful save
-            // setTimeout(() => window.close(), 1500);
-        };
-
-        request.onerror = (event) => {
-            console.error('Error adding flashcard:', event.target.error);
-            setSaveStatus(`Error saving: ${event.target.error.message}`);
-        };
-
-        transaction.oncomplete = () => {
-            console.log('Save transaction completed.');
-            // Feedback already set in request.onsuccess
-        };
-
-        transaction.onerror = (event) => {
-            console.error('Save transaction error:', event.target.error);
-             // Don't override specific add error if already set
-            if (!saveStatus.startsWith('Error')) {
-                 setSaveStatus(`Transaction error: ${event.target.error.message}`);
-            }
-        };
-
-    } catch (err) {
-        console.error('Failed to open DB for saving:', err);
-        setSaveStatus(`DB Error: ${err.message}`);
-    }
+      if (!selectedText || !backText.trim()) {
+          setSaveStatus('Front or back text missing.');
+          return;
+      }
+      setSaveStatus('Saving...');
+      const newFlashcard = {
+          front: selectedText,
+          back: backText.trim(),
+          bucket: 1,
+          createdAt: new Date().toISOString()
+      };
+      try {
+          const db = await openDB();
+          const transaction = db.transaction(STORE_NAME, 'readwrite');
+          const store = transaction.objectStore(STORE_NAME);
+          const request = store.add(newFlashcard);
+          request.onsuccess = () => {
+              console.log('Flashcard added successfully!', request.result);
+              setSaveStatus(`Flashcard saved! (ID: ${request.result})`);
+              setBackText('');
+              // Clear status after a delay
+              setTimeout(() => setSaveStatus(''), 2000);
+          };
+          request.onerror = (event) => {
+              console.error('Error adding flashcard:', event.target.error);
+              setSaveStatus(`Error saving: ${event.target.error.message}`);
+          };
+          transaction.onerror = (event) => {
+              console.error('Save transaction error:', event.target.error);
+              if (!saveStatus.startsWith('Error')) {
+                  setSaveStatus(`Transaction error: ${event.target.error.message}`);
+              }
+          };
+      } catch (err) {
+          console.error('Failed to open DB for saving:', err);
+          setSaveStatus(`DB Error: ${err.message}`);
+      }
   };
 
   // --- Render Logic ---
-  if (isLoading) return <div>Loading selected text...</div>;
-  // Prioritize DB connection error over text fetching error if both occurred
-  if (error && error === "Could not connect to database.") return <div>Error: {error}</div>;
+  const renderCreateView = () => {
+      if (isCreateLoading) return <div>Loading selected text...</div>;
+      if (createError && createError === "Could not connect to database.") return <div>Error: {createError}</div>;
 
+      return (
+         <>
+            <h4>Create Flashcard</h4>
+            {createError && <p style={{color: 'red'}}>{createError}</p>}
+
+            {selectedText ? (
+                <>
+                    <label htmlFor="flashcard-front">Front (Selected Text):</label>
+                    <div id="flashcard-front" className="selected-text-display">
+                        {selectedText}
+                    </div>
+                    <label htmlFor="flashcard-back">Back (Translation/Definition):</label>
+                    <textarea
+                        id="flashcard-back"
+                        rows="3"
+                        value={backText}
+                        onChange={(e) => setBackText(e.target.value)}
+                        placeholder="Enter the back of the flashcard..."
+                        disabled={saveStatus === 'Saving...'}
+                    />
+                    <button
+                        onClick={handleSave}
+                        disabled={!backText.trim() || saveStatus === 'Saving...'}
+                    >
+                        {saveStatus === 'Saving...' ? 'Saving...' : 'Save Flashcard'}
+                    </button>
+                    {saveStatus && <p>{saveStatus}</p>}
+                </>
+            ) : (
+                <p>Select text on a page first, then open this popup.</p>
+            )}
+        </>
+      );
+  }
 
   return (
-    <>
-      <h4>Create Flashcard</h4>
+    <div style={{display: 'flex', flexDirection: 'column', gap: '15px'}}>
+      {/* Navigation Buttons */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>
+        <button onClick={() => setView('create')} disabled={view === 'create'}>
+          Create New
+        </button>
+        <button onClick={() => setView('manage')} disabled={view === 'manage'}>
+          Manage Cards
+        </button>
+      </div>
 
-      {error && error !== "Could not connect to database." && <p style={{color: 'red'}}>{error}</p>} {/* Show other errors */}
-
-      {selectedText ? (
-        <>
-          <label htmlFor="flashcard-front">Front (Selected Text):</label>
-          <div id="flashcard-front" className="selected-text-display">
-            {selectedText}
-          </div>
-          <label htmlFor="flashcard-back">Back (Translation/Definition):</label>
-          <textarea
-            id="flashcard-back"
-            rows="3"
-            value={backText}
-            onChange={(e) => setBackText(e.target.value)}
-            placeholder="Enter the back of the flashcard..."
-            disabled={saveStatus === 'Saving...'} // Disable while saving
-          />
-          <button
-             onClick={handleSave}
-             disabled={!backText.trim() || saveStatus === 'Saving...'} // Disable if back empty or saving
-           >
-            {saveStatus === 'Saving...' ? 'Saving...' : 'Save Flashcard'}
-          </button>
-          {saveStatus && <p>{saveStatus}</p>} {/* Display save status/feedback */}
-        </>
-      ) : (
-        <p>Select text on a page first, then open this popup.</p>
-      )}
-    </>
+      {/* Conditional View Rendering */}
+      {view === 'create' && renderCreateView()}
+      {view === 'manage' && <ManageFlashcards />}
+    </div>
   );
 }
 
