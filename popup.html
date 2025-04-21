@@ -5,18 +5,57 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Flashcard AI</title>
     <style>
+      /* Basic styling for the popup */
       body {
-        width: 300px; /* Give the popup a defined width */
         font-family: sans-serif;
+        width: 350px; /* Adjust width as needed */
+        padding: 10px;
       }
+      #root { /* Target the container for React */
+        display: flex;
+        flex-direction: column;
+        gap: 10px; /* Add spacing between elements */
+      }
+      textarea, input { /* Style input fields */
+        width: 95%; /* Leave some padding */
+        padding: 5px;
+        margin-bottom: 5px;
+      }
+      button { /* Style buttons */
+        padding: 8px 15px;
+        cursor: pointer;
+      }
+      .selected-text-display { /* Style for the selected text area */
+          background-color: #f0f0f0;
+          padding: 8px;
+          border-radius: 4px;
+          max-height: 100px; /* Prevent very long text */
+          overflow-y: auto; /* Add scroll if needed */
+          border: 1px solid #ccc;
+          margin-bottom: 10px; /* Space below text */
+          /* Make sure whitespace/newlines are preserved */
+          white-space: pre-wrap;
+          word-wrap: break-word;
+      }
+       label { /* Style labels */
+          font-weight: bold;
+          margin-bottom: 3px;
+          display: block;
+       }
+       h4 { /* Adjust heading margin if needed */
+         margin-top: 0;
+         margin-bottom: 10px;
+       }
     </style>
 </head>
 <body>
-    <h1>Flashcard AI</h1>
+    <!-- The H1 is optional, the React App component adds its own heading -->
+    <!-- <h1>Flashcard AI</h1> -->
     <div id="root">
-        <!-- React app will mount here later -->
+        <!-- React app will mount here -->
         Loading...
     </div>
-    <!-- We will add script tags for React later -->
+    <!-- This script tag is essential to load your compiled React code -->
+    <script src="popup.js"></script>
 </body>
 </html>
