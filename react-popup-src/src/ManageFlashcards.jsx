@@ -1,304 +1,267 @@
 // react-popup-src/src/ManageFlashcards.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 
-// --- Start: IndexedDB Logic (Remains the same) ---
+// --- IndexedDB Logic (Version 2 - Complete, but duplicated - Should match App.jsx) ---
+// This section MUST be identical in App.jsx until refactored
 const DB_NAME = 'flashcardDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = 'flashcards';
+const DECKS_STORE_NAME = 'decks';
 let dbPromise = null;
+
 function openDB() {
-    if (dbPromise) return dbPromise;
-    console.log(`Manage: Attempting to open DB: ${DB_NAME} version ${DB_VERSION}`);
+    // --- V2 openDB function (same as provided previously for App.jsx) ---
+    if (dbPromise && dbPromise.readyState !== 'done') { return dbPromise; }
+    console.log(`Manage: Opening/Requesting DB: ${DB_NAME} v${DB_VERSION}`);
     dbPromise = new Promise((resolve, reject) => {
+        if (typeof indexedDB === 'undefined') { return reject(new Error("IndexedDB not supported by this browser.")); }
         const request = indexedDB.open(DB_NAME, DB_VERSION);
-        request.onupgradeneeded=(e)=>{
-            console.log('Manage: DB upgrade needed.');
-            const tempDb=e.target.result;
-            if(!tempDb.objectStoreNames.contains(STORE_NAME)){
-                console.log(`Manage: Creating store: ${STORE_NAME}`);
-                tempDb.createObjectStore(STORE_NAME,{keyPath:'id',autoIncrement:true});
-                // Optionally add indexes here later if needed for decks etc.
-                // tempDb.createObjectStore('decks', { keyPath: 'id', autoIncrement: true });
-                // const flashcardStore = transaction.objectStore(STORE_NAME);
-                // flashcardStore.createIndex('deckIdIndex', 'deckId', { unique: false });
-                console.log('Manage: Store created.');
-            }
+        request.onupgradeneeded = (event) => {
+             const currentVersion = event.oldVersion; console.log(`Manage: DB upgrade needed from v${currentVersion} to v${DB_VERSION}.`);
+             const tempDb = event.target.result; const transaction = event.target.transaction;
+             if (!tempDb.objectStoreNames.contains(STORE_NAME)) {tempDb.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });console.log(`Manage: Created store ${STORE_NAME}`);}
+             if (currentVersion < 2) {
+                 if (!tempDb.objectStoreNames.contains(DECKS_STORE_NAME)) {tempDb.createObjectStore(DECKS_STORE_NAME, { keyPath: 'id', autoIncrement: true });console.log(`Manage: Created store ${DECKS_STORE_NAME}`);}
+                 if (transaction && transaction.objectStoreNames.contains(STORE_NAME)) { try { const fs = transaction.objectStore(STORE_NAME); if (!fs.indexNames.contains('deckIdIndex')) {fs.createIndex('deckIdIndex', 'deckId', { unique: false });console.log(`Manage: Created index deckIdIndex`);}} catch(e) { console.error("Manage: Error creating index", e); }} else {console.warn("Manage: Tx inactive for index add");}
+             }
+             console.log('Manage: DB upgrade finished.');
         };
-        request.onsuccess=(e)=>{
-            const db=e.target.result;
-            console.log(`Manage: DB "${DB_NAME}" opened (v${db.version}).`);
-            db.onerror=(errEvent)=>{console.error("Manage: DB connection error:",errEvent.target.error);dbPromise=null;};
-            db.onclose=()=>{console.warn('Manage: DB connection closed.');dbPromise=null;};
-            resolve(db);
-        };
+        request.onsuccess=(e)=>{const db=e.target.result;console.log(`Manage: DB "${DB_NAME}" opened (v${db.version}).`);db.onerror=(errEvent)=>{console.error("Manage: DB error:",errEvent.target.error);dbPromise=null;};db.onclose=()=>{console.warn('Manage: DB closed.');dbPromise=null;};resolve(db);};
         request.onerror=(e)=>{console.error("Manage: Error opening DB:",e.target.error);dbPromise=null;reject(e.target.error);};
         request.onblocked=(e)=>{console.warn("Manage: DB open blocked.");dbPromise=null;reject(new Error("DB blocked"));}
     });
     return dbPromise;
- }
-// --- End: IndexedDB Logic ---
+}
+// --- End DB Logic ---
 
 
-function ManageFlashcards() {
-    // --- State ---
-    const [flashcards, setFlashcards] = useState([]);
-    const [isLoading, setIsLoading] = useState(true);
-    const [error, setError] = useState('');
-    const [feedback, setFeedback] = useState(''); // General feedback message
-    const [selectedCardId, setSelectedCardId] = useState(null); // ID of the card being viewed/edited
-    const [isEditing, setIsEditing] = useState(false); // Are we in edit mode for the selected card?
-    const [editFormData, setEditFormData] = useState({ front: '', back: '', notes: '', tags: '' }); // Form data for editing
-    const [newDeckName, setNewDeckName] = useState(''); // State for deck creation input
-    // const [decks, setDecks] = useState([]); // State for actual decks (to be implemented)
+// Receive props from App for deck management
+function ManageFlashcards({
+    decks,                  // Decks list (from App state)
+    feedback,               // General feedback message (from App state)
+    setFeedback,            // Function to set App's feedback message
+    onCreateDeck,           // Function in App to create a deck
+    onEditDeck,             // Function in App to start deck edit
+    onSaveDeckName,         // Function in App to save renamed deck
+    onCancelEditDeck,       // Function in App to cancel deck rename
+    onDeleteDeck,           // Function in App to delete a deck
+    editingDeckId,          // ID of deck being edited (from App state)
+    setEditingDeckId,       // Function to set App's editingDeckId
+    editingDeckName,        // Current edit name (from App state)
+    setEditingDeckName      // Function to set App's editingDeckName
+}) {
+    // --- Local State for Card Management ---
+    const [flashcards, setFlashcards] = useState([]); // Cards for display
+    const [isLoadingCards, setIsLoadingCards] = useState(true); // Loading state for cards specifically
+    const [cardError, setCardError] = useState(''); // Error state for cards specifically
+    const [selectedCardId, setSelectedCardId] = useState(null); // Which card is selected
+    const [isEditingCard, setIsEditingCard] = useState(false); // Is selected card being edited?
+    const [editCardFormData, setEditCardFormData] = useState({ front: '', back: '', notes: '', tags: '', deckId: '' }); // Form data for card edit
+    const [newDeckName, setNewDeckName] = useState(''); // Local state ONLY for the deck input field value
 
-
-    // --- Fetch Flashcards ---
-    const fetchFlashcards = async () => {
-        let isMounted = true; // Prevent state update on unmounted component if fetch is slow
-        setIsLoading(true);
-        setError('');
-        setFlashcards([]);
-        setSelectedCardId(null); // Reset view state when refetching
-        setIsEditing(false);
-        setFeedback(''); // Clear feedback on refetch
+    // --- Fetch Flashcards (Local to this component) ---
+    const fetchFlashcards = useCallback(async () => {
+        setIsLoadingCards(true); setCardError(''); setFlashcards([]); // Reset card state
+        setSelectedCardId(null); setIsEditingCard(false); // Reset view state too
         try {
-            const db = await openDB();
-            const transaction = db.transaction(STORE_NAME, 'readonly');
-            const store = transaction.objectStore(STORE_NAME);
-            const getAllRequest = store.getAll();
+            const db = await openDB(); const transaction = db.transaction(STORE_NAME, 'readonly'); const store = transaction.objectStore(STORE_NAME); const getAllRequest = store.getAll();
+            return new Promise((resolve, reject) => {
+                 getAllRequest.onsuccess=()=>{ setFlashcards(getAllRequest.result||[]); resolve(); };
+                 getAllRequest.onerror=(e)=>{ setCardError(`Card Fetch Error: ${e.target.error?.message}`); reject(e.target.error); };
+                 transaction.onerror=(e)=>{ setCardError(`Card Tx Error: ${e.target.error?.message}`); reject(e.target.error);};
+            });
+        } catch (err) { setCardError(`Card DB Error: ${err.message}`); return Promise.reject(err); }
+         finally { setIsLoadingCards(false); } // Set loading false after fetch attempt
+    }, []); // No dependencies needed if it only uses local state setters
 
-            getAllRequest.onsuccess = () => {
-                if (isMounted) {
-                    console.log("Fetched cards:", getAllRequest.result);
-                    setFlashcards(getAllRequest.result || []);
-                    setIsLoading(false);
-                }
-            };
-            getAllRequest.onerror = (e) => {
-                if (isMounted) {
-                    console.error('Error fetching:', e.target.error);
-                    setError(`Fetch Error: ${e.target.error.message}`);
-                    setIsLoading(false);
-                }
-            };
-            transaction.onerror = (e) => {
-                if (isMounted && !error) {
-                    console.error('Read transaction error:', e.target.error);
-                    setError(`Tx Error: ${e.target.error.message}`);
-                    setIsLoading(false);
-                }
-            };
-        } catch (err) {
-            if (isMounted) {
-                console.error('Failed to open DB for fetching:', err);
-                setError(`DB Error: ${err.message}`);
-                setIsLoading(false);
-            }
-        }
-        // Cleanup function for fetch effect - set isMounted false
-        return () => { isMounted = false; console.log("Unmounting ManageFlashcards or fetch finished"); };
-    };
-
-    // Fetch on initial mount
+    // Fetch cards when the component mounts
     useEffect(() => {
-        const cleanup = fetchFlashcards();
-        // Explicitly return the cleanup function if fetchFlashcards returns one
-        return cleanup;
-    }, []); // Empty dependency array means run once on mount
+        fetchFlashcards();
+        // No cleanup needed for isMounted as fetchFlashcards handles its own async logic
+    }, [fetchFlashcards]); // Rerun if fetchFlashcards identity changes
 
-    // --- Helper to find the selected card object ---
+    // --- Helper ---
     const selectedCard = flashcards.find(card => card.id === selectedCardId);
 
-    // --- Event Handlers ---
-    const handleViewDetails = (id) => { setSelectedCardId(id); setIsEditing(false); setFeedback(''); };
-    const handleCloseDetails = () => { setSelectedCardId(null); setIsEditing(false); setFeedback(''); };
-    const handleEdit = () => {
-        if (!selectedCard) return;
-        setFeedback('');
-        setEditFormData({
-            front: selectedCard.front || '',
-            back: selectedCard.back || '',
-            notes: selectedCard.notes || '',
-            tags: (selectedCard.tags || []).join(', ')
-            // Add deckId here later if needed: deckId: selectedCard.deckId || ''
-        });
-        setIsEditing(true);
-     };
-    const handleCancelEdit = () => { setIsEditing(false); setFeedback(''); };
-    const handleEditFormChange = (event) => {
-         const { name, value } = event.target; setEditFormData(prevData => ({ ...prevData, [name]: value }));
-     };
-
-    const handleSaveChanges = async () => {
-        if (!selectedCard) return;
-        setFeedback('Saving...');
-        try {
-            const db = await openDB();
-            const transaction = db.transaction(STORE_NAME, 'readwrite');
-            const store = transaction.objectStore(STORE_NAME);
-            const getRequest = store.get(selectedCardId);
-
-            getRequest.onsuccess = (event) => {
-                const originalCard = event.target.result;
-                if (!originalCard) { setFeedback("Error: Card not found."); return; }
-
-                const updatedCard = {
-                    ...originalCard,
-                    front: editFormData.front.trim(),
-                    back: editFormData.back.trim(),
-                    notes: editFormData.notes.trim(),
-                    tags: editFormData.tags.split(',').map(tag => tag.trim()).filter(tag => tag !== ''),
-                    lastModified: new Date().toISOString()
-                    // Add deckId later: deckId: editFormData.deckId || null // Store null if no deck selected
-                };
-
-                const putRequest = store.put(updatedCard);
-                putRequest.onsuccess = () => {
-                    console.log("Card updated successfully:", updatedCard);
-                    setFeedback('Changes saved!');
-                    setIsEditing(false);
-                    setFlashcards(prev => prev.map(c => c.id === selectedCardId ? updatedCard : c));
-                    setTimeout(() => setFeedback(''), 2000);
-                };
-                putRequest.onerror = (e) => { console.error("Error updating card:", e.target.error); setFeedback(`Error saving: ${e.target.error.message}`); };
-            };
-             getRequest.onerror = (e) => { console.error("Error fetching card for update:", e.target.error); setFeedback(`Error fetching card: ${e.target.error.message}`); };
-            transaction.onerror = (e) => { console.error("Update transaction error:", e.target.error); if (!feedback.startsWith('Error')) { setFeedback(`Tx Error: ${e.target.error.message}`); } };
-        } catch (err) {
-            console.error('Failed to open DB for saving:', err); setFeedback(`DB Error: ${err.message}`);
-        }
+    // --- Flashcard Event Handlers (Use local DB logic & state) ---
+    const handleViewDetails = (id) => { setSelectedCardId(id); setIsEditingCard(false); setFeedback(''); setEditingDeckId(null); /* Close deck edit if open */ };
+    const handleCloseDetails = () => { setSelectedCardId(null); setIsEditingCard(false); setFeedback(''); };
+    const handleEditCard = () => {
+        if (!selectedCard) return; setFeedback('');
+        setEditCardFormData({ front: selectedCard.front || '', back: selectedCard.back || '', notes: selectedCard.notes || '', tags: (selectedCard.tags || []).join(', '), deckId: selectedCard.deckId || '' });
+        setIsEditingCard(true);
+    };
+    const handleCancelEditCard = () => { setIsEditingCard(false); setFeedback(''); };
+    const handleEditCardFormChange = (event) => {
+        const { name, value } = event.target; const processedValue = name === 'deckId' ? (value ? parseInt(value, 10) : '') : value;
+        setEditCardFormData(prevData => ({ ...prevData, [name]: processedValue }));
+    };
+    const handleSaveChangesCard = async () => {
+        if (!selectedCard) return; setFeedback('Saving Card...'); // Use the shared feedback setter
+        try { const db = await openDB(); const transaction = db.transaction(STORE_NAME, 'readwrite'); const store = transaction.objectStore(STORE_NAME); const getRequest = store.get(selectedCardId);
+            getRequest.onsuccess = (event) => { const originalCard = event.target.result; if (!originalCard) { setFeedback("Error: Card not found."); return; }
+                 const updatedCard = { ...originalCard, front: editCardFormData.front.trim(), back: editCardFormData.back.trim(), notes: editCardFormData.notes.trim(), tags: editCardFormData.tags.split(',').map(t => t.trim()).filter(t => t !== ''), deckId: editCardFormData.deckId || null, lastModified: new Date().toISOString() };
+                 const putRequest = store.put(updatedCard);
+                 putRequest.onsuccess = () => { setFeedback('Card changes saved!'); setIsEditingCard(false); setFlashcards(prev => prev.map(c => c.id === selectedCardId ? updatedCard : c)); setTimeout(() => setFeedback(''), 2000); }; // Update local card state
+                 putRequest.onerror = (e) => { setFeedback(`Error saving card: ${e.target.error?.message}`); }; };
+            getRequest.onerror = (e) => { setFeedback(`Error fetching card to save: ${e.target.error?.message}`); };
+            transaction.onerror = (e) => { if (!feedback?.startsWith('Error')) setFeedback(`Card Save Tx Error: ${e.target.error?.message}`); };
+        } catch (err) { setFeedback(`Card Save DB Error: ${err.message}`); }
+    };
+    const handleDeleteCard = async () => {
+        if (!selectedCard || !window.confirm(`DELETE CARD: "${selectedCard.front}"?`)) return; setFeedback('Deleting Card...');
+        try { const db = await openDB(); const transaction = db.transaction(STORE_NAME, 'readwrite'); const store = transaction.objectStore(STORE_NAME); const deleteRequest = store.delete(selectedCardId);
+             deleteRequest.onsuccess = () => { setFeedback('Card deleted.'); setFlashcards(prev => prev.filter(card => card.id !== selectedCardId)); setSelectedCardId(null); setIsEditingCard(false); setTimeout(() => setFeedback(''), 2000); }; // Update local card state
+             deleteRequest.onerror = (e) => { setFeedback(`Error deleting card: ${e.target.error?.message}`); };
+             transaction.onerror = (e) => { if (!feedback?.startsWith('Error')) setFeedback(`Card Delete Tx Error: ${e.target.error?.message}`); } ;
+        } catch (err) { setFeedback(`Card Delete DB Error: ${err.message}`); }
     };
 
-    const handleDelete = async () => {
-        if (!selectedCard || !window.confirm(`Are you sure you want to delete the flashcard "${selectedCard.front}"?`)) {
-             return;
-        }
-        setFeedback('Deleting...');
-        try {
-            const db = await openDB();
-            const transaction = db.transaction(STORE_NAME, 'readwrite');
-            const store = transaction.objectStore(STORE_NAME);
-            const deleteRequest = store.delete(selectedCardId);
+    // --- Deck Management Handlers (Call props received from App) ---
+    const handleInternalCreateDeck = () => { onCreateDeck(newDeckName, () => setNewDeckName('')); }; // Clear local input via callback passed to App's handler
+    const handleInternalEditDeck = (deck) => { onEditDeck(deck); }; // Call App's handler to start edit
+    const handleInternalCancelEditDeck = () => { onCancelEditDeck(); }; // Call App's handler
+    const handleInternalSaveDeckName = () => { onSaveDeckName(); }; // Call App's handler
+    const handleInternalDeleteDeck = (deck) => { onDeleteDeck(deck); }; // Call App's handler
 
-            deleteRequest.onsuccess = () => {
-                console.log("Card deleted successfully:", selectedCardId);
-                setFeedback('Flashcard deleted.');
-                setFlashcards(prev => prev.filter(card => card.id !== selectedCardId));
-                setSelectedCardId(null);
-                setIsEditing(false);
-                setTimeout(() => setFeedback(''), 2000);
-            };
-            deleteRequest.onerror = (e) => { console.error("Error deleting card:", e.target.error); setFeedback(`Error deleting: ${e.target.error.message}`); };
-            transaction.onerror = (e) => { console.error("Delete transaction error:", e.target.error); if (!feedback.startsWith('Error')) { setFeedback(`Tx Error: ${e.target.error.message}`); } };
-        } catch (err) {
-            console.error('Failed to open DB for deletion:', err); setFeedback(`DB Error: ${err.message}`);
-        }
-     };
-
-    const handleCreateDeck = () => { // Placeholder
-        if (!newDeckName.trim()) return;
-        console.log("Creating deck:", newDeckName.trim());
-        alert("Deck creation functionality not implemented yet.");
-        setNewDeckName('');
-        // Later: Save deck to storage and update decks list
-    };
 
     // --- Render Logic ---
-    if (isLoading) return <div>Loading flashcards...</div>;
-    if (error) return <div style={{ color: 'red' }}>Error loading flashcards: {error}</div>;
+    // Use local isLoadingCards and cardError for card sections
+    // Use props.feedback for general feedback
 
-    // --- Styles ---
-    const cardStyle = { border: '1px solid #ccc', padding: '10px', marginBottom: '8px', borderRadius: '4px', backgroundColor: '#f9f9f9' };
-    const detailAreaStyle = { marginTop: '15px', padding: '15px', border: '1px solid #ddd', borderRadius: '5px', backgroundColor: 'white' };
-    const inputStyle = { display: 'block', width: '95%', padding: '6px', marginBottom: '10px', border: '1px solid #ccc', borderRadius: '3px' }; // Make inputs block for labels
-    const labelStyle = { fontWeight: 'bold', display: 'block', marginBottom: '3px' };
-    const buttonGroupStyle = { marginTop: '10px', display: 'flex', gap: '10px', flexWrap: 'wrap' }; // Allow buttons to wrap
-    const feedbackStyle = { marginTop: '10px', color: feedback.startsWith('Error') ? 'red' : 'green', minHeight: '1em', fontWeight: 'bold' };
+    // Styles...
+    const baseStyle = { padding: '10px', marginBottom: '15px', borderRadius: '4px' };
+    const sectionStyle = { ...baseStyle, border: '1px solid #eee' };
+    const cardStyle = { ...baseStyle, border: '1px solid #ccc', backgroundColor: '#f9f9f9', marginBottom: '8px' }; // Adjusted margin
+    const detailAreaStyle = { ...baseStyle, border: '1px solid #ddd', backgroundColor: 'white', marginTop: '15px' };
+    const inputStyle = { display: 'block', boxSizing: 'border-box', width: '100%', padding: '8px', marginBottom: '10px', border: '1px solid #ccc', borderRadius: '3px' };
+    const deckInputStyle = { flexGrow: 1, marginRight: '5px', padding: '4px', border: '1px solid #ccc', borderRadius: '3px' };
+    const labelStyle = { fontWeight: 'bold', display: 'block', marginBottom: '3px', fontSize: '0.9em' };
+    const buttonGroupStyle = { marginTop: '15px', display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'flex-start' };
+    const deckListItemStyle = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid #eee', gap: '10px' };
+    const deckButtonGroupStyle = { display: 'flex', gap: '5px', flexShrink: 0 };
+    const feedbackStyle = { marginTop: '10px', color: feedback?.startsWith('Error') ? 'red' : 'green', minHeight: '1em', fontWeight: 'bold', textAlign: 'center' };
+
 
     return (
         <div>
             <h2>Manage Flashcards</h2>
+            {/* Display feedback from App */}
             {feedback && <p style={feedbackStyle}>{feedback}</p>}
+            {cardError && <p style={{color:'red', textAlign: 'center'}}>{cardError}</p>}
 
-            {/* Deck Creation UI (Placeholder) */}
-            {!selectedCardId && ( // Only show when not viewing details
-                <div style={{ border: '1px solid #eee', padding: '10px', marginBottom: '15px', borderRadius: '4px' }}>
-                    <h4>Create New Deck</h4>
-                    <div style={{ display: 'flex', gap: '10px' }}>
-                        <input
-                            type="text"
-                            value={newDeckName}
-                            onChange={(e) => setNewDeckName(e.target.value)}
-                            placeholder="Enter new deck name"
-                            style={{ flexGrow: 1, padding: '6px' }}
-                        />
-                        <button onClick={handleCreateDeck} disabled={!newDeckName.trim()}>
-                            Create Deck
-                        </button>
+
+            {/* Deck Management Section */}
+            {!selectedCardId && ( // Only show deck mgmt when not viewing a card
+                <div style={sectionStyle}>
+                    <h4>Decks</h4>
+                    <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+                        <input type="text" value={newDeckName} onChange={(e) => setNewDeckName(e.target.value)} placeholder="Enter new deck name" style={{...inputStyle, width: 'auto', flexGrow: 1, marginBottom: 0}} />
+                        <button onClick={handleInternalCreateDeck} disabled={!newDeckName.trim()}>Create Deck</button>
                     </div>
-                    {/* Add deck list/management here later */}
+                    {/* List Existing Decks */}
+                    {decks.length > 0 ? ( // Use decks prop
+                        <div style={{ maxHeight: '150px', overflowY: 'auto', borderTop: '1px solid #ddd', marginTop: '10px', paddingTop: '5px' }}>
+                            {decks.map(deck => ( // Use decks prop
+                                <div key={deck.id} style={deckListItemStyle}>
+                                    {editingDeckId === deck.id ? ( // Use editingDeckId prop
+                                        <>
+                                             {/* Use editingDeckName prop and setEditingDeckName prop */}
+                                            <input type="text" value={editingDeckName} onChange={(e) => setEditingDeckName(e.target.value)} style={deckInputStyle} autoFocus onKeyDown={(e) => { if (e.key === 'Enter') handleInternalSaveDeckName(); else if (e.key === 'Escape') handleInternalCancelEditDeck(); }}/>
+                                            <div style={deckButtonGroupStyle}>
+                                                <button onClick={handleInternalSaveDeckName} disabled={!editingDeckName.trim() || editingDeckName.trim() === deck.name}>Save</button>
+                                                <button onClick={handleInternalCancelEditDeck}>Cancel</button>
+                                            </div>
+                                        </>
+                                    ) : (
+                                         <>
+                                             <span title={deck.name} style={{ marginRight: '10px', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{deck.name}</span>
+                                             <div style={deckButtonGroupStyle}>
+                                                 {/* Call internal handlers which call props from App */}
+                                                 <button onClick={() => handleInternalEditDeck(deck)} style={{padding: '2px 5px'}}>Rename</button>
+                                             <button onClick={() => handleInternalDeleteDeck(deck)} style={{ backgroundColor: '#f44336', color: 'white', border: 'none', cursor: 'pointer', padding: '2px 5px', borderRadius: '3px' }}>X</button>
+                                         </div>
+                                     </>
+                                        
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    ) : <p style={{fontSize: '0.9em', color: '#666', marginTop: '10px'}}>No decks created yet.</p>}
                 </div>
             )}
 
-            {/* Card List */}
-            {!selectedCardId && flashcards.length === 0 && <p>No flashcards saved yet.</p>}
-            {!selectedCardId && flashcards.length > 0 && (
-                 <ul style={{ listStyle: 'none', padding: 0, maxHeight: '300px', overflowY: 'auto' }}>
-                    {flashcards.map((card) => (
-                        <li key={card.id} style={cardStyle}>
-                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                              <span title={card.front} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: '10px' }}>{card.front}</span>
-                              <button onClick={() => handleViewDetails(card.id)} style={{flexShrink: 0}}>View Details</button>
-                           </div>
-                        </li>
-                    ))}
-                 </ul>
+             {/* Separator */}
+             {!selectedCardId && <hr style={{margin: '20px 0'}}/>}
+
+            {/* Card List Section */}
+            {!selectedCardId && (
+                 <>
+                     <h4>Flashcards</h4>
+                     {isLoadingCards && <p>Loading cards...</p>}
+                     {cardError && <p style={{color: 'red'}}>Error loading cards: {cardError}</p>}
+                     {!isLoadingCards && !cardError && flashcards.length === 0 && <p>No flashcards saved yet.</p>}
+                     {!isLoadingCards && !cardError && flashcards.length > 0 && (
+                          <ul style={{ listStyle: 'none', padding: 0, maxHeight: '300px', overflowY: 'auto' }}>
+                             {flashcards.map((card) => (
+                                 <li key={card.id} style={cardStyle}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                       <span title={card.front} style={{ flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: '10px' }}>{card.front}</span>
+                                       <button onClick={() => handleViewDetails(card.id)} style={{flexShrink: 0}}>View Details</button>
+                                    </div>
+                                     {/* Display deck name using decks prop */}
+                                     <p style={{fontSize: '0.8em', color: '#555', margin: '5px 0 0 0'}}>Deck: {decks.find(d => d.id === card.deckId)?.name || 'Unassigned'}</p>
+                                 </li>
+                             ))}
+                          </ul>
+                      )}
+                  </>
              )}
 
-            {/* Detail/Edit View Area */}
+
+            {/* Detail/Edit View Area for selected card */}
             {selectedCard && (
                 <div style={detailAreaStyle}>
-                    <h3>{isEditing ? 'Edit Flashcard' : 'Flashcard Details'} (ID: {selectedCard.id})</h3>
-
-                    {!isEditing ? (
-                        // --- View Mode ---
+                    <h3>{isEditingCard ? 'Edit Flashcard' : 'Flashcard Details'} (ID: {selectedCard.id})</h3>
+                    {!isEditingCard ? (
+                        // --- Card View Mode ---
                         <>
+                             {/* Details use local selectedCard and decks prop */}
                              <p><strong style={labelStyle}>Front:</strong> {selectedCard.front}</p>
                              <p><strong style={labelStyle}>Back:</strong> {selectedCard.back}</p>
                              {selectedCard.notes && <p><strong style={labelStyle}>Notes:</strong> <span style={{whiteSpace: 'pre-wrap'}}>{selectedCard.notes}</span></p>}
                              {selectedCard.tags && selectedCard.tags.length > 0 && <p><strong style={labelStyle}>Tags:</strong> {selectedCard.tags.join(', ')}</p>}
+                             <p><strong style={labelStyle}>Deck:</strong> {decks.find(d => d.id === selectedCard.deckId)?.name || 'Unassigned'}</p>
                              <p><strong style={labelStyle}>Bucket:</strong> {selectedCard.bucket !== undefined ? selectedCard.bucket : 'N/A'}</p>
                              <p><strong style={labelStyle}>Created:</strong> {selectedCard.createdAt ? new Date(selectedCard.createdAt).toLocaleString() : 'N/A'}</p>
                              {selectedCard.lastModified && <p><strong style={labelStyle}>Modified:</strong> {new Date(selectedCard.lastModified).toLocaleString()}</p> }
-
+                            {/* Buttons use local card handlers */}
                             <div style={buttonGroupStyle}>
-                                <button onClick={handleEdit}>Edit</button>
-                                <button onClick={handleDelete} style={{backgroundColor: '#f44336', color: 'white'}}>Delete</button>
-                                <button onClick={handleCloseDetails} style={{marginLeft: 'auto'}}>Close</button>
+                                <button onClick={handleEditCard}>Edit Card</button>
+                                <button onClick={handleDeleteCard} style={{backgroundColor: '#f44336', color: 'white'}}>Delete Card</button>
+                                <button onClick={handleCloseDetails} style={{marginLeft: 'auto'}}>Close Details</button>
                             </div>
                         </>
                     ) : (
-                        // --- Edit Mode ---
+                        // --- Card Edit Mode ---
                         <>
-                             <div><label htmlFor="edit-front" style={labelStyle}>Front:</label><textarea id="edit-front" name="front" value={editFormData.front} onChange={handleEditFormChange} rows="3" style={inputStyle} /></div>
-                             <div><label htmlFor="edit-back" style={labelStyle}>Back:</label><textarea id="edit-back" name="back" value={editFormData.back} onChange={handleEditFormChange} rows="3" style={inputStyle} /></div>
-                             <div><label htmlFor="edit-notes" style={labelStyle}>Notes:</label><textarea id="edit-notes" name="notes" value={editFormData.notes} onChange={handleEditFormChange} rows="2" style={inputStyle} placeholder="Optional notes..." /></div>
-                             <div><label htmlFor="edit-tags" style={labelStyle}>Tags (comma-separated):</label><input type="text" id="edit-tags" name="tags" value={editFormData.tags} onChange={handleEditFormChange} style={inputStyle} placeholder="e.g., vocabulary, chapter 1" /></div>
-
-                             {/* Deck Assignment UI (Placeholder) */}
+                             {/* Inputs controlled by local editCardFormData state */}
+                             <div><label htmlFor="edit-front" style={labelStyle}>Front:</label><textarea id="edit-front" name="front" value={editCardFormData.front} onChange={handleEditCardFormChange} rows="3" style={inputStyle} /></div>
+                             <div><label htmlFor="edit-back" style={labelStyle}>Back:</label><textarea id="edit-back" name="back" value={editCardFormData.back} onChange={handleEditCardFormChange} rows="3" style={inputStyle} /></div>
+                             <div><label htmlFor="edit-notes" style={labelStyle}>Notes:</label><textarea id="edit-notes" name="notes" value={editCardFormData.notes} onChange={handleEditCardFormChange} rows="2" style={inputStyle} placeholder="Optional notes..." /></div>
+                             <div><label htmlFor="edit-tags" style={labelStyle}>Tags (comma-separated):</label><input type="text" id="edit-tags" name="tags" value={editCardFormData.tags} onChange={handleEditCardFormChange} style={inputStyle} placeholder="e.g., vocabulary, chapter 1" /></div>
                              <div>
                                  <label htmlFor="edit-deck" style={labelStyle}>Assign to Deck:</label>
-                                 <select id="edit-deck" name="deck" /* value={editFormData.deckId || ''} onChange={handleEditFormChange} */ disabled style={inputStyle}>
-                                     <option value="">-- Select Deck --</option>
-                                     {/* Later: Populate with options from decks state */}
-                                     <option value="placeholder1">Placeholder Deck 1</option>
-                                     <option value="placeholder2">Placeholder Deck 2</option>
+                                 {/* Dropdown populated by decks prop, value controlled by local editCardFormData */}
+                                 <select id="edit-deck" name="deckId" value={editCardFormData.deckId} onChange={handleEditCardFormChange} style={inputStyle}>
+                                     <option value="">-- Unassigned --</option>
+                                     {decks.map(deck => (<option key={deck.id} value={deck.id}>{deck.name}</option>))}
                                  </select>
                              </div>
-
+                            {/* Buttons use local card handlers */}
                             <div style={buttonGroupStyle}>
-                                <button onClick={handleSaveChanges}>Save Changes</button>
-                                <button onClick={handleCancelEdit}>Cancel</button>
+                                <button onClick={handleSaveChangesCard}>Save Card Changes</button>
+                                <button onClick={handleCancelEditCard}>Cancel</button>
                             </div>
                         </>
                     )}
