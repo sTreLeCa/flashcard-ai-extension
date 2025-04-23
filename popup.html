@@ -4,19 +4,20 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Flashcard AI</title>
-    <style>
-      body {
-        width: 300px; /* Give the popup a defined width */
-        font-family: sans-serif;
-      }
-    </style>
+    <link rel="stylesheet" href="styles.css">
 </head>
 <body>
     <h1>Flashcard AI</h1>
-    <div id="root">
-        <!-- React app will mount here later -->
-        Loading...
+    <div id="app">
+        <nav>
+            <button id="manage-tab" class="active">Manage</button>
+            <button id="review-tab">Review</button>
+        </nav>
+        <div id="content-area">
+            <div id="loading">Loading...</div>
+        </div>
     </div>
-    <!-- We will add script tags for React later -->
+    <script src="db.js"></script>
+    <script src="popup.js"></script>
 </body>
 </html>
