@@ -1,11 +1,12 @@
 // react-popup-src/src/App.jsx
 import React, { useState, useEffect, useCallback } from 'react';
 import ManageFlashcards from './ManageFlashcards'; // Import the child component
+import SettingsPage from './SettingsPage';
 
 // --- IndexedDB Logic (Version 2 - Complete) ---
 // This section MUST be identical in ManageFlashcards.jsx until refactored
 const DB_NAME = 'flashcardDB';
-const DB_VERSION = 2; // Ensure this is 2
+const DB_VERSION = 4; // Ensure this is 2
 const STORE_NAME = 'flashcards';
 const DECKS_STORE_NAME = 'decks';
 const UNASSIGNED_DECK_ID = 0;
@@ -102,7 +103,7 @@ function openDB() {
 
 function App() {
     // --- State ---
-    const [view, setView] = useState('create');
+    const [view, setView] = useState('create'); // 'create', 'manage', or 'settings'
     const [selectedText, setSelectedText] = useState('');
     const [backText, setBackText] = useState('');
     const [selectedDeckId, setSelectedDeckId] = useState(''); // For create view dropdown selection
@@ -436,7 +437,8 @@ function App() {
                           {suggestionError && <p style={{ marginTop: '-5px', marginBottom: '10px', color: 'red', fontSize: '0.85em' }}>{suggestionError}</p>}
 
                          <label htmlFor="deck-select" style={labelStyle}>Add to Deck:</label>
-                         <select id="deck-select" value={String(selectedDeckId)} onChange={(e) => setSelectedDeckId(e.target.value === String(UNASSIGNED_DECK_ID) ? UNASSIGNED_DECK_ID : parseInt(e.target.value, 10))} disabled={isLoading || saveStatus === 'Saving...'} style={inputStyle} >
+                         <select id="deck-select" value={String(selectedDeckId)} onChange={(e) => setSelectedDeckId(e.target.value === String(UNASSIGNED_DECK_ID) ? UNASSIGNED_DECK_ID 
+                            : parseInt(e.target.value, 10))} disabled={isLoading || saveStatus === 'Saving...'} style={inputStyle} >
                              <option value={String(UNASSIGNED_DECK_ID)}>-- Unassigned --</option>
                              {decks.map(deck => (<option key={deck.id} value={deck.id}>{deck.name}</option>))}
                              {decks.length === 0 && <option disabled>No decks available</option>}
@@ -459,10 +461,12 @@ function App() {
         // Increased width slightly, added padding
         <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', padding: '10px', width: '380px' }}>
             {/* Navigation Buttons */}
-            <div style={{ display: 'flex', justifyContent: 'space-around', borderBottom: '1px solid #eee', paddingBottom: '10px' }}>
-                <button onClick={() => setView('create')} disabled={view === 'create'}>Create New</button>
-                <button onClick={() => setView('manage')} disabled={view === 'manage'}>Manage Cards</button>
-            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-around', borderBottom: '1px solid #eee', paddingBottom: '10px', marginBottom: '5px' }}>
+            <button onClick={() => setView('create')} disabled={view === 'create'}>Create New</button>
+            <button onClick={() => setView('manage')} disabled={view === 'manage'}>Manage Cards</button>
+            {/* VVV ADD THIS BUTTON VVV */}
+            <button onClick={() => setView('settings')} disabled={view === 'settings'}>Settings</button>
+        </div>
 
             {/* Show General Feedback/Error from App State */}
             {feedback && <p style={{ marginTop: 0, marginBottom: 0, color: feedback.startsWith('Error') ? 'red' : 'green', textAlign:'center', fontWeight:'bold' }}>{feedback}</p>}
@@ -492,6 +496,7 @@ function App() {
                     // error={error}
                 />
             )}
+            {view === 'settings' && <SettingsPage />}
         </div>
     );
 }
