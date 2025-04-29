@@ -8,8 +8,8 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    // "moduleResolution": "node", // Often default/needed
-    // "resolveJsonModule": true, // If you import JSON files
+    "moduleResolution": "node", // Often default/needed
+    "resolveJsonModule": true, // If you import JSON files
   },
   "include": ["src/**/*"], // Only compile files in src
   "exclude": ["node_modules"] // Don't compile dependencies

@@ -2,28 +2,27 @@
 import express, { Express, Request, Response } from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
+import suggestionRouter from './routes/suggest'; // <<< IMPORT THE ROUTER
 
-// Load environment variables from .env file
 dotenv.config();
 
 const app: Express = express();
-const port = process.env.PORT || 3001; // Use port 3001 or from env
+const port = process.env.PORT || 3001;
 
 // Middleware
-app.use(cors()); // Enable CORS for requests from the extension
-app.use(express.json()); // Parse JSON request bodies
+app.use(cors()); // Enable CORS
+app.use(express.json()); // Enable JSON body parsing
 
-// Simple test route
+// --- Routes ---
+// Basic health check route
 app.get('/', (req: Request, res: Response) => {
   res.send('Flashcard AI Backend Proxy is running!');
 });
 
-// Placeholder for the actual suggestion route (to be added)
-// app.post('/api/suggest', (req: Request, res: Response) => {
-//   // Logic to call Gemini will go here
-//   res.json({ suggestion: 'Placeholder suggestion' });
-// });
+// Use the suggestion router for paths starting with /api
+app.use('/api', suggestionRouter); // <<< USE THE ROUTER
 
+// --- Start Server ---
 app.listen(port, () => {
   console.log(`[server]: Server is running at http://localhost:${port}`);
 });
