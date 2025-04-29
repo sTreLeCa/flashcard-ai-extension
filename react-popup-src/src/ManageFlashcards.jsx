@@ -1,5 +1,6 @@
 // react-popup-src/src/ManageFlashcards.jsx
 import React, { useState, useEffect, useCallback } from 'react';
+import ReviewFlashcards from './ReviewFlashcards'; // Import the review component
 
 // --- IndexedDB Logic (Version 2 - Complete, but duplicated - Should match App.jsx) ---
 // This section MUST be identical in App.jsx until refactored
@@ -50,6 +51,9 @@ function ManageFlashcards({
     editingDeckName,        // Current edit name (from App state)
     setEditingDeckName      // Function to set App's editingDeckName
 }) {
+    // --- Tab State ---
+    const [activeTab, setActiveTab] = useState('manage'); // 'manage' or 'review'
+
     // --- Local State for Card Management ---
     const [flashcards, setFlashcards] = useState([]); // Cards for display
     const [isLoadingCards, setIsLoadingCards] = useState(true); // Loading state for cards specifically
@@ -141,131 +145,181 @@ function ManageFlashcards({
     const deckListItemStyle = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '5px 0', borderBottom: '1px solid #eee', gap: '10px' };
     const deckButtonGroupStyle = { display: 'flex', gap: '5px', flexShrink: 0 };
     const feedbackStyle = { marginTop: '10px', color: feedback?.startsWith('Error') ? 'red' : 'green', minHeight: '1em', fontWeight: 'bold', textAlign: 'center' };
+    
+    // New styles for tabs
+    const tabsContainerStyle = { 
+        display: 'flex', 
+        borderBottom: '1px solid #ddd', 
+        marginBottom: '20px' 
+    };
+    
+    const tabStyle = { 
+        padding: '10px 20px',
+        cursor: 'pointer', 
+        backgroundColor: '#f1f1f1',
+        border: '1px solid #ddd',
+        borderBottomColor: '#f1f1f1',
+        borderRadius: '5px 5px 0 0',
+        marginRight: '5px'
+    };
+    
+    const activeTabStyle = {
+        ...tabStyle,
+        backgroundColor: 'white',
+        borderBottomColor: 'white',
+        fontWeight: 'bold'
+    };
 
 
     return (
         <div>
-            <h2>Manage Flashcards</h2>
+            <h2>Flashcard Management</h2>
             {/* Display feedback from App */}
             {feedback && <p style={feedbackStyle}>{feedback}</p>}
             {cardError && <p style={{color:'red', textAlign: 'center'}}>{cardError}</p>}
 
-
-            {/* Deck Management Section */}
-            {!selectedCardId && ( // Only show deck mgmt when not viewing a card
-                <div style={sectionStyle}>
-                    <h4>Decks</h4>
-                    <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
-                        <input type="text" value={newDeckName} onChange={(e) => setNewDeckName(e.target.value)} placeholder="Enter new deck name" style={{...inputStyle, width: 'auto', flexGrow: 1, marginBottom: 0}} />
-                        <button onClick={handleInternalCreateDeck} disabled={!newDeckName.trim()}>Create Deck</button>
-                    </div>
-                    {/* List Existing Decks */}
-                    {decks.length > 0 ? ( // Use decks prop
-                        <div style={{ maxHeight: '150px', overflowY: 'auto', borderTop: '1px solid #ddd', marginTop: '10px', paddingTop: '5px' }}>
-                            {decks.map(deck => ( // Use decks prop
-                                <div key={deck.id} style={deckListItemStyle}>
-                                    {editingDeckId === deck.id ? ( // Use editingDeckId prop
-                                        <>
-                                             {/* Use editingDeckName prop and setEditingDeckName prop */}
-                                            <input type="text" value={editingDeckName} onChange={(e) => setEditingDeckName(e.target.value)} style={deckInputStyle} autoFocus onKeyDown={(e) => { if (e.key === 'Enter') handleInternalSaveDeckName(); else if (e.key === 'Escape') handleInternalCancelEditDeck(); }}/>
-                                            <div style={deckButtonGroupStyle}>
-                                                <button onClick={handleInternalSaveDeckName} disabled={!editingDeckName.trim() || editingDeckName.trim() === deck.name}>Save</button>
-                                                <button onClick={handleInternalCancelEditDeck}>Cancel</button>
-                                            </div>
-                                        </>
-                                    ) : (
-                                         <>
-                                             <span title={deck.name} style={{ marginRight: '10px', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{deck.name}</span>
-                                             <div style={deckButtonGroupStyle}>
-                                                 {/* Call internal handlers which call props from App */}
-                                                 <button onClick={() => handleInternalEditDeck(deck)} style={{padding: '2px 5px'}}>Rename</button>
-                                             <button onClick={() => handleInternalDeleteDeck(deck)} style={{ backgroundColor: '#f44336', color: 'white', border: 'none', cursor: 'pointer', padding: '2px 5px', borderRadius: '3px' }}>X</button>
-                                         </div>
-                                     </>
-                                        
-                                    )}
-                                </div>
-                            ))}
-                        </div>
-                    ) : <p style={{fontSize: '0.9em', color: '#666', marginTop: '10px'}}>No decks created yet.</p>}
+            {/* Tab Navigation */}
+            <div style={tabsContainerStyle}>
+                <div 
+                    style={activeTab === 'manage' ? activeTabStyle : tabStyle}
+                    onClick={() => setActiveTab('manage')}
+                >
+                    Manage Cards & Decks
                 </div>
-            )}
+                <div 
+                    style={activeTab === 'review' ? activeTabStyle : tabStyle}
+                    onClick={() => setActiveTab('review')}
+                >
+                    Review Cards
+                </div>
+            </div>
 
-             {/* Separator */}
-             {!selectedCardId && <hr style={{margin: '20px 0'}}/>}
-
-            {/* Card List Section */}
-            {!selectedCardId && (
-                 <>
-                     <h4>Flashcards</h4>
-                     {isLoadingCards && <p>Loading cards...</p>}
-                     {cardError && <p style={{color: 'red'}}>Error loading cards: {cardError}</p>}
-                     {!isLoadingCards && !cardError && flashcards.length === 0 && <p>No flashcards saved yet.</p>}
-                     {!isLoadingCards && !cardError && flashcards.length > 0 && (
-                          <ul style={{ listStyle: 'none', padding: 0, maxHeight: '300px', overflowY: 'auto' }}>
-                             {flashcards.map((card) => (
-                                 <li key={card.id} style={cardStyle}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                       <span title={card.front} style={{ flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: '10px' }}>{card.front}</span>
-                                       <button onClick={() => handleViewDetails(card.id)} style={{flexShrink: 0}}>View Details</button>
-                                    </div>
-                                     {/* Display deck name using decks prop */}
-                                     <p style={{fontSize: '0.8em', color: '#555', margin: '5px 0 0 0'}}>Deck: {decks.find(d => d.id === card.deckId)?.name || 'Unassigned'}</p>
-                                 </li>
-                             ))}
-                          </ul>
-                      )}
-                  </>
-             )}
-
-
-            {/* Detail/Edit View Area for selected card */}
-            {selectedCard && (
-                <div style={detailAreaStyle}>
-                    <h3>{isEditingCard ? 'Edit Flashcard' : 'Flashcard Details'} (ID: {selectedCard.id})</h3>
-                    {!isEditingCard ? (
-                        // --- Card View Mode ---
-                        <>
-                             {/* Details use local selectedCard and decks prop */}
-                             <p><strong style={labelStyle}>Front:</strong> {selectedCard.front}</p>
-                             <p><strong style={labelStyle}>Back:</strong> {selectedCard.back}</p>
-                             {selectedCard.notes && <p><strong style={labelStyle}>Notes:</strong> <span style={{whiteSpace: 'pre-wrap'}}>{selectedCard.notes}</span></p>}
-                             {selectedCard.tags && selectedCard.tags.length > 0 && <p><strong style={labelStyle}>Tags:</strong> {selectedCard.tags.join(', ')}</p>}
-                             <p><strong style={labelStyle}>Deck:</strong> {decks.find(d => d.id === selectedCard.deckId)?.name || 'Unassigned'}</p>
-                             <p><strong style={labelStyle}>Bucket:</strong> {selectedCard.bucket !== undefined ? selectedCard.bucket : 'N/A'}</p>
-                             <p><strong style={labelStyle}>Created:</strong> {selectedCard.createdAt ? new Date(selectedCard.createdAt).toLocaleString() : 'N/A'}</p>
-                             {selectedCard.lastModified && <p><strong style={labelStyle}>Modified:</strong> {new Date(selectedCard.lastModified).toLocaleString()}</p> }
-                            {/* Buttons use local card handlers */}
-                            <div style={buttonGroupStyle}>
-                                <button onClick={handleEditCard}>Edit Card</button>
-                                <button onClick={handleDeleteCard} style={{backgroundColor: '#f44336', color: 'white'}}>Delete Card</button>
-                                <button onClick={handleCloseDetails} style={{marginLeft: 'auto'}}>Close Details</button>
+            {/* Content based on active tab */}
+            {activeTab === 'manage' ? (
+                // MANAGE TAB CONTENT - Your original content
+                <div>
+                    {/* Deck Management Section */}
+                    {!selectedCardId && ( // Only show deck mgmt when not viewing a card
+                        <div style={sectionStyle}>
+                            <h4>Decks</h4>
+                            <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+                                <input type="text" value={newDeckName} onChange={(e) => setNewDeckName(e.target.value)} placeholder="Enter new deck name" style={{...inputStyle, width: 'auto', flexGrow: 1, marginBottom: 0}} />
+                                <button onClick={handleInternalCreateDeck} disabled={!newDeckName.trim()}>Create Deck</button>
                             </div>
-                        </>
-                    ) : (
-                        // --- Card Edit Mode ---
+                            {/* List Existing Decks */}
+                            {decks.length > 0 ? ( // Use decks prop
+                                <div style={{ maxHeight: '150px', overflowY: 'auto', borderTop: '1px solid #ddd', marginTop: '10px', paddingTop: '5px' }}>
+                                    {decks.map(deck => ( // Use decks prop
+                                        <div key={deck.id} style={deckListItemStyle}>
+                                            {editingDeckId === deck.id ? ( // Use editingDeckId prop
+                                                <>
+                                                    {/* Use editingDeckName prop and setEditingDeckName prop */}
+                                                    <input type="text" value={editingDeckName} onChange={(e) => setEditingDeckName(e.target.value)} style={deckInputStyle} autoFocus onKeyDown={(e) => { if (e.key === 'Enter') handleInternalSaveDeckName(); else if (e.key === 'Escape') handleInternalCancelEditDeck(); }}/>
+                                                    <div style={deckButtonGroupStyle}>
+                                                        <button onClick={handleInternalSaveDeckName} disabled={!editingDeckName.trim() || editingDeckName.trim() === deck.name}>Save</button>
+                                                        <button onClick={handleInternalCancelEditDeck}>Cancel</button>
+                                                    </div>
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <span title={deck.name} style={{ marginRight: '10px', flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{deck.name}</span>
+                                                    <div style={deckButtonGroupStyle}>
+                                                        {/* Call internal handlers which call props from App */}
+                                                        <button onClick={() => handleInternalEditDeck(deck)} style={{padding: '2px 5px'}}>Rename</button>
+                                                        <button onClick={() => handleInternalDeleteDeck(deck)} style={{ backgroundColor: '#f44336', color: 'white', border: 'none', cursor: 'pointer', padding: '2px 5px', borderRadius: '3px' }}>X</button>
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : <p style={{fontSize: '0.9em', color: '#666', marginTop: '10px'}}>No decks created yet.</p>}
+                        </div>
+                    )}
+
+                    {/* Separator */}
+                    {!selectedCardId && <hr style={{margin: '20px 0'}}/>}
+
+                    {/* Card List Section */}
+                    {!selectedCardId && (
                         <>
-                             {/* Inputs controlled by local editCardFormData state */}
-                             <div><label htmlFor="edit-front" style={labelStyle}>Front:</label><textarea id="edit-front" name="front" value={editCardFormData.front} onChange={handleEditCardFormChange} rows="3" style={inputStyle} /></div>
-                             <div><label htmlFor="edit-back" style={labelStyle}>Back:</label><textarea id="edit-back" name="back" value={editCardFormData.back} onChange={handleEditCardFormChange} rows="3" style={inputStyle} /></div>
-                             <div><label htmlFor="edit-notes" style={labelStyle}>Notes:</label><textarea id="edit-notes" name="notes" value={editCardFormData.notes} onChange={handleEditCardFormChange} rows="2" style={inputStyle} placeholder="Optional notes..." /></div>
-                             <div><label htmlFor="edit-tags" style={labelStyle}>Tags (comma-separated):</label><input type="text" id="edit-tags" name="tags" value={editCardFormData.tags} onChange={handleEditCardFormChange} style={inputStyle} placeholder="e.g., vocabulary, chapter 1" /></div>
-                             <div>
-                                 <label htmlFor="edit-deck" style={labelStyle}>Assign to Deck:</label>
-                                 {/* Dropdown populated by decks prop, value controlled by local editCardFormData */}
-                                 <select id="edit-deck" name="deckId" value={editCardFormData.deckId} onChange={handleEditCardFormChange} style={inputStyle}>
-                                     <option value="">-- Unassigned --</option>
-                                     {decks.map(deck => (<option key={deck.id} value={deck.id}>{deck.name}</option>))}
-                                 </select>
-                             </div>
-                            {/* Buttons use local card handlers */}
-                            <div style={buttonGroupStyle}>
-                                <button onClick={handleSaveChangesCard}>Save Card Changes</button>
-                                <button onClick={handleCancelEditCard}>Cancel</button>
-                            </div>
+                            <h4>Flashcards</h4>
+                            {isLoadingCards && <p>Loading cards...</p>}
+                            {cardError && <p style={{color: 'red'}}>Error loading cards: {cardError}</p>}
+                            {!isLoadingCards && !cardError && flashcards.length === 0 && <p>No flashcards saved yet.</p>}
+                            {!isLoadingCards && !cardError && flashcards.length > 0 && (
+                                <ul style={{ listStyle: 'none', padding: 0, maxHeight: '300px', overflowY: 'auto' }}>
+                                    {flashcards.map((card) => (
+                                        <li key={card.id} style={cardStyle}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                <span title={card.front} style={{ flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: '10px' }}>{card.front}</span>
+                                                <button onClick={() => handleViewDetails(card.id)} style={{flexShrink: 0}}>View Details</button>
+                                            </div>
+                                            {/* Display deck name using decks prop */}
+                                            <p style={{fontSize: '0.8em', color: '#555', margin: '5px 0 0 0'}}>Deck: {decks.find(d => d.id === card.deckId)?.name || 'Unassigned'}</p>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
                         </>
                     )}
+
+                    {/* Detail/Edit View Area for selected card */}
+                    {selectedCard && (
+                        <div style={detailAreaStyle}>
+                            <h3>{isEditingCard ? 'Edit Flashcard' : 'Flashcard Details'} (ID: {selectedCard.id})</h3>
+                            {!isEditingCard ? (
+                                // --- Card View Mode ---
+                                <>
+                                    {/* Details use local selectedCard and decks prop */}
+                                    <p><strong style={labelStyle}>Front:</strong> {selectedCard.front}</p>
+                                    <p><strong style={labelStyle}>Back:</strong> {selectedCard.back}</p>
+                                    {selectedCard.notes && <p><strong style={labelStyle}>Notes:</strong> <span style={{whiteSpace: 'pre-wrap'}}>{selectedCard.notes}</span></p>}
+                                    {selectedCard.tags && selectedCard.tags.length > 0 && <p><strong style={labelStyle}>Tags:</strong> {selectedCard.tags.join(', ')}</p>}
+                                    <p><strong style={labelStyle}>Deck:</strong> {decks.find(d => d.id === selectedCard.deckId)?.name || 'Unassigned'}</p>
+                                    <p><strong style={labelStyle}>Bucket:</strong> {selectedCard.bucket !== undefined ? selectedCard.bucket : 'N/A'}</p>
+                                    <p><strong style={labelStyle}>Created:</strong> {selectedCard.createdAt ? new Date(selectedCard.createdAt).toLocaleString() : 'N/A'}</p>
+                                    {selectedCard.lastModified && <p><strong style={labelStyle}>Modified:</strong> {new Date(selectedCard.lastModified).toLocaleString()}</p> }
+                                    {/* Buttons use local card handlers */}
+                                    <div style={buttonGroupStyle}>
+                                        <button onClick={handleEditCard}>Edit Card</button>
+                                        <button onClick={handleDeleteCard} style={{backgroundColor: '#f44336', color: 'white'}}>Delete Card</button>
+                                        <button onClick={handleCloseDetails} style={{marginLeft: 'auto'}}>Close Details</button>
+                                    </div>
+                                </>
+                            ) : (
+                                // --- Card Edit Mode ---
+                                <>
+                                    {/* Inputs controlled by local editCardFormData state */}
+                                    <div><label htmlFor="edit-front" style={labelStyle}>Front:</label><textarea id="edit-front" name="front" value={editCardFormData.front} onChange={handleEditCardFormChange} rows="3" style={inputStyle} /></div>
+                                    <div><label htmlFor="edit-back" style={labelStyle}>Back:</label><textarea id="edit-back" name="back" value={editCardFormData.back} onChange={handleEditCardFormChange} rows="3" style={inputStyle} /></div>
+                                    <div><label htmlFor="edit-notes" style={labelStyle}>Notes:</label><textarea id="edit-notes" name="notes" value={editCardFormData.notes} onChange={handleEditCardFormChange} rows="2" style={inputStyle} placeholder="Optional notes..." /></div>
+                                    <div><label htmlFor="edit-tags" style={labelStyle}>Tags (comma-separated):</label><input type="text" id="edit-tags" name="tags" value={editCardFormData.tags} onChange={handleEditCardFormChange} style={inputStyle} placeholder="e.g., vocabulary, chapter 1" /></div>
+                                    <div>
+                                        <label htmlFor="edit-deck" style={labelStyle}>Assign to Deck:</label>
+                                        {/* Dropdown populated by decks prop, value controlled by local editCardFormData */}
+                                        <select id="edit-deck" name="deckId" value={editCardFormData.deckId} onChange={handleEditCardFormChange} style={inputStyle}>
+                                            <option value="">-- Unassigned --</option>
+                                            {decks.map(deck => (<option key={deck.id} value={deck.id}>{deck.name}</option>))}
+                                        </select>
+                                    </div>
+                                    {/* Buttons use local card handlers */}
+                                    <div style={buttonGroupStyle}>
+                                        <button onClick={handleSaveChangesCard}>Save Card Changes</button>
+                                        <button onClick={handleCancelEditCard}>Cancel</button>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    )}
                 </div>
+            ) : (
+                // REVIEW TAB CONTENT - New functionality
+                <ReviewFlashcards 
+                    decks={decks}
+                    openDB={openDB}
+                    setFeedback={setFeedback}
+                />
             )}
         </div>
     );
