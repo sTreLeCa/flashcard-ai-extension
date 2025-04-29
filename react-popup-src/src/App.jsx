@@ -8,6 +8,7 @@ const DB_NAME = 'flashcardDB';
 const DB_VERSION = 2; // Ensure this is 2
 const STORE_NAME = 'flashcards';
 const DECKS_STORE_NAME = 'decks';
+const UNASSIGNED_DECK_ID = 0;
 let dbPromise = null;
 
 function openDB() {
@@ -112,6 +113,8 @@ function App() {
     const [error, setError] = useState(''); // Combined error state
     const [feedback, setFeedback] = useState(''); // Shared feedback (primarily for deck ops)
     const [saveStatus, setSaveStatus] = useState(''); // Specific feedback for card saving
+    const [isSuggesting, setIsSuggesting] = useState(false); // Is suggestion being fetched?
+    const [suggestionError, setSuggestionError] = useState(''); // Error specific to suggestion fetching
 
     // --- Deck Data Fetching ---
     const fetchDecks = useCallback(async () => {
@@ -150,12 +153,65 @@ function App() {
         }
     }, [error]); // Re-run if general error changes? Maybe not needed. Consider removing error dependency.
 
+    const fetchSuggestion = useCallback(async (textToSuggest) => {
+        if (!textToSuggest || textToSuggest.trim().length === 0) {
+            console.log("App: No text to suggest.");
+            return; // Don't fetch if no text
+        }
+
+        console.log(`App: Fetching suggestion for "${textToSuggest.substring(0,50)}..."`);
+        setIsSuggesting(true);
+        setSuggestionError(''); // Clear previous suggestion errors
+        setBackText(''); // Clear any manual input while fetching
+        setSaveStatus(''); // Clear previous save status
+
+        // Make sure your backend server is running on localhost:3001
+        const backendUrl = 'http://localhost:3001/api/suggest';
+
+        try {
+            const response = await fetch(backendUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ text: textToSuggest }),
+            });
+
+            if (!response.ok) {
+                // Try to get error message from backend response body
+                let errorMsg = `HTTP error! status: ${response.status}`;
+                try {
+                    const errorData = await response.json();
+                    errorMsg = errorData.error || errorMsg;
+                } catch (e) { /* Ignore parsing error */ }
+                throw new Error(errorMsg);
+            }
+
+            const data = await response.json();
+
+            if (data.suggestion) {
+                console.log("App: Suggestion received:", data.suggestion);
+                setBackText(data.suggestion); // <<< UPDATE backText state
+            } else {
+                 console.warn("App: Suggestion received but was empty/null.");
+                 setSuggestionError("Received empty suggestion from backend.");
+            }
+
+        } catch (err) {
+            console.error("App: Failed to fetch suggestion:", err);
+            setSuggestionError(`Suggestion Error: ${err.message}`);
+        } finally {
+            setIsSuggesting(false);
+        }
+    }, []); // No dependencies needed here
+
     // --- Initial Data Loading ---
     useEffect(() => {
         let isMounted = true;
         const loadInitialData = async () => {
             if (!isMounted) return;
-            setIsLoading(true); setError(''); setSelectedText(''); setFeedback(''); setSaveStatus(''); // Reset states
+            setIsLoading(true); setError(''); setSelectedText(''); setFeedback(''); setSaveStatus('');
+            setSuggestionError(''); setBackText(''); // Reset states
 
             // Promise to get selected text from background
             const textPromise = new Promise((resolve, reject) => {
@@ -181,26 +237,17 @@ function App() {
                 ]);
                 if (isMounted) {
                     setSelectedText(fetchedText);
+                    // --- Trigger suggestion fetch AFTER getting text ---
+                    if (fetchedText) {
+                         fetchSuggestion(fetchedText); // <<< CALL fetchSuggestion
+                    }
                 }
-            } catch (err) {
-                console.error("App: Error loading initial data:", err);
-                if (isMounted) {
-                     // Error state should already be set by fetchDecks or textPromise rejection
-                     if (!error) { // Set a generic error if none was set by specific fetches
-                         setError(err.message || "Failed to load initial data.");
-                     }
-                }
-            } finally {
-                if (isMounted) {
-                    setIsLoading(false);
-                }
-            }
+            } catch (err) { if (isMounted && !error) setError(err.message || "Failed initial load."); }
+            finally { if (isMounted) setIsLoading(false); }
         };
-
         loadInitialData();
-
-        return () => { isMounted = false; }; // Cleanup function to prevent state updates on unmounted component
-    }, [fetchDecks]); // Rerun effect if fetchDecks function identity changes (it shouldn't with useCallback)
+        return () => { isMounted = false; };
+    }, [fetchDecks, fetchSuggestion]); // Rerun effect if fetchDecks function identity changes (it shouldn't with useCallback)
 
     // --- Flashcard Saving ---
     const handleSave = async () => {
@@ -348,34 +395,51 @@ function App() {
 
     // --- Render Logic ---
     const renderCreateView = () => {
-        // ... (Render logic for Create view, using App's state: decks, selectedDeckId etc.) ...
-        // This should be largely the same as the previous App.jsx renderCreateView
-         if (isLoading && !selectedText) return <div>Loading...</div>;
-         if (error && error.includes("DB Error")) return <div style={{color: 'red'}}>Error: {error}</div>;
+        if (isLoading && !selectedText) return <div style={{textAlign:'center', padding: '20px'}}>Loading...</div>;
+        if (error && error.includes("DB Error")) return <div style={{color: 'red', textAlign:'center', padding: '20px'}}>Error: {error}</div>;
 
-         const inputStyle = { display: 'block', boxSizing: 'border-box', width: '100%', padding: '8px', marginBottom: '10px', border: '1px solid #ccc', borderRadius: '3px' };
-         const labelStyle = { fontWeight: 'bold', display: 'block', marginBottom: '3px', fontSize: '0.9em' };
-         const detailBoxStyle = { border: '1px solid #ccc', padding: '8px', marginBottom: '10px', borderRadius: '4px', backgroundColor: '#f9f9f9', maxHeight: '100px', overflowY: 'auto', whiteSpace: 'pre-wrap', wordWrap: 'break-word' };
-         const feedbackStyle = { marginTop: '10px', color: saveStatus.startsWith('Error') ? 'red' : 'green', minHeight: '1em', fontWeight: 'bold' };
+        const inputStyle = { display: 'block', boxSizing: 'border-box', width: '100%', padding: '8px', marginBottom: '10px', border: '1px solid #ccc', borderRadius: '3px', fontSize: '1em' };
+        const labelStyle = { fontWeight: 'bold', display: 'block', marginBottom: '4px', fontSize: '0.9em' };
+        const detailBoxStyle = { border: '1px solid #ccc', padding: '8px', marginBottom: '10px', borderRadius: '4px', backgroundColor: '#f9f9f9', maxHeight: '100px', overflowY: 'auto', whiteSpace: 'pre-wrap', wordWrap: 'break-word' };
+        const feedbackStyle = { marginTop: '10px', color: saveStatus.startsWith('Error') ? 'red' : 'green', minHeight: '1em', fontWeight: 'bold', textAlign: 'center'};
+        const suggestionFeedbackStyle = {...feedbackStyle, color: suggestionError ? 'red' : '#666', fontWeight: 'normal'}; // Style for suggestion status
 
-         return (
-             <>
+        return (
+            <div style={{ padding: '0 10px 10px 10px' }}>
                  <h4>Create Flashcard</h4>
-                 {error && !error.includes("DB Error") && <p style={{ color: 'red' }}>{error}</p>}
+                 {error && !error.includes("DB Error") && <p style={{ color: 'red', textAlign:'center' }}>{error}</p>}
 
                  {selectedText ? (
                      <>
                          <label htmlFor="flashcard-front" style={labelStyle}>Front:</label>
                          <div id="flashcard-front" style={detailBoxStyle}>{selectedText}</div>
 
-                         <label htmlFor="flashcard-back" style={labelStyle}>Back:</label>
-                         <textarea id="flashcard-back" rows="3" value={backText} onChange={(e) => setBackText(e.target.value)} placeholder="Enter the back..." disabled={saveStatus === 'Saving...'} style={inputStyle} />
+                         <label htmlFor="flashcard-back" style={labelStyle}>
+                             Back (Translation/Definition):
+                             {isSuggesting && <span style={{fontWeight:'normal', fontStyle:'italic', marginLeft: '5px'}}>(Getting suggestion...)</span>}
+                             {suggestionError && <span style={{fontWeight:'normal', fontStyle:'italic', marginLeft: '5px', color:'red'}}>(Suggestion failed)</span>}
+                         </label>
+                         <textarea
+                            id="flashcard-back"
+                            rows="3"
+                            value={backText} // Value is now controlled by state (updated by suggestion or typing)
+                            onChange={(e) => {
+                                 setBackText(e.target.value); // Allow override
+                                 setSuggestionError(''); // Clear error on type
+                                 setSaveStatus(''); // Clear status on type
+                            }}
+                            placeholder={isSuggesting ? "Loading suggestion..." : "Enter the back..."} // Dynamic placeholder
+                            disabled={saveStatus === 'Saving...'}
+                            style={inputStyle}
+                          />
+                          {/* Display suggestion error more prominently if needed */}
+                          {suggestionError && <p style={{ marginTop: '-5px', marginBottom: '10px', color: 'red', fontSize: '0.85em' }}>{suggestionError}</p>}
 
                          <label htmlFor="deck-select" style={labelStyle}>Add to Deck:</label>
-                         <select id="deck-select" value={selectedDeckId} onChange={(e) => setSelectedDeckId(e.target.value)} disabled={isLoading || saveStatus === 'Saving...'} style={inputStyle} >
-                            <option value="">-- Unassigned --</option>
-                            {decks.map(deck => (<option key={deck.id} value={deck.id}>{deck.name}</option>))}
-                            {decks.length === 0 && <option disabled>No decks available</option>}
+                         <select id="deck-select" value={String(selectedDeckId)} onChange={(e) => setSelectedDeckId(e.target.value === String(UNASSIGNED_DECK_ID) ? UNASSIGNED_DECK_ID : parseInt(e.target.value, 10))} disabled={isLoading || saveStatus === 'Saving...'} style={inputStyle} >
+                             <option value={String(UNASSIGNED_DECK_ID)}>-- Unassigned --</option>
+                             {decks.map(deck => (<option key={deck.id} value={deck.id}>{deck.name}</option>))}
+                             {decks.length === 0 && <option disabled>No decks available</option>}
                          </select>
 
                          <button onClick={handleSave} disabled={!backText.trim() || saveStatus === 'Saving...'}>
@@ -386,8 +450,8 @@ function App() {
                  ) : (
                      !error.includes("environment error") && <p>Select text on a page first.</p>
                  )}
-             </>
-         );
+            </div>
+        );
     };
 
     // --- Main App Return ---
