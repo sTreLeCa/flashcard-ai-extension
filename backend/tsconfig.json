@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2016", // Or newer like ES2020
+    "module": "CommonJS", // Standard for Node.js/Express
+    "outDir": "./dist", // Where compiled JS will go
+    "rootDir": "./src", // Where your TS source code is
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "moduleResolution": "node", // Often default/needed
+    "resolveJsonModule": true, // If you import JSON files
+  },
+  "include": ["src/**/*"], // Only compile files in src
+  "exclude": ["node_modules"] // Don't compile dependencies
+}
