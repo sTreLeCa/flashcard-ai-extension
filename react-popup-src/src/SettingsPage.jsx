@@ -173,38 +173,55 @@ function SettingsPage() {
     // --- Cleanup webcam on component unmount ---
     useEffect(() => { return () => { stopWebcam(); }; }, [stopWebcam]);// Effect depends on stream to know if cleanup is needed
 
-    const addTrainingSample = useCallback(async (classId) => {
-        if (!mobilenetModel || !knn || !videoRef.current || videoRef.current.readyState < 3) {
-            console.warn("Models or video not ready for training sample.");
-            return; // Exit if models/video aren't ready
-        }
-         // Ensure video dimensions are available
-         if (videoRef.current.videoWidth === 0 || videoRef.current.videoHeight === 0) {
-            console.warn("Video dimensions not available yet.");
-            return;
-        }
 
-        try {
-            // Get image data from video element into a tensor
-            const img = tf.browser.fromPixels(videoRef.current);
-            // Get intermediate activation from MobileNet (the features)
-            const logits = mobilenetModel.infer(img, true);
-            // Add example to KNN classifier
-            knn.addExample(logits, classId);
-            // Update sample counts
-            setClassExampleCounts(prevCounts => ({
-                ...prevCounts,
-                [classId]: (prevCounts[classId] || 0) + 1
-            }));
-            // Dispose tensors to free memory
-            img.dispose();
-            logits.dispose();
-        } catch (error) {
-            console.error("Error adding training sample:", error);
-            setInfoText(`Error during sample capture: ${error.message}`);
-        }
+    // Inside SettingsPage.jsx
+const addTrainingSample = useCallback(async (classId) => {
+    if (!mobilenetModel || !knn || !videoRef.current || videoRef.current.readyState < 3) {
+        console.warn("Models or video not ready for training sample.");
+        return;
+    }
+    if (videoRef.current.videoWidth === 0 || videoRef.current.videoHeight === 0) {
+        console.warn("Video dimensions not available yet.");
+        return;
+    }
 
-    }, [knn, mobilenetModel]);
+    let img = null; // Declare outside try
+    let logits = null;
+
+    try {
+        // Use tf.tidy to handle the temporary 'img' tensor
+        logits = tf.tidy(() => {
+            img = tf.browser.fromPixels(videoRef.current);
+            return mobilenetModel.infer(img, true); // Return logits to keep it
+        });
+
+        // *** CRITICAL: DO NOT DISPOSE logits here ***
+        // Pass the valid logits tensor directly to addExample.
+        // The KNN library is responsible for handling this tensor internally.
+        knn.addExample(logits, classId);
+
+        // Update sample counts (this is fine)
+        setClassExampleCounts(prevCounts => ({
+            ...prevCounts,
+            [classId]: (prevCounts[classId] || 0) + 1
+        }));
+
+        // Let logits be disposed later, perhaps when the component unmounts
+        // or if explicitly cleared. For now, we let KNN manage it.
+        // If you find memory leaks LATER, you might need to manage disposal
+        // more carefully, potentially by cloning before addExample, but
+        // try this simpler approach first.
+
+    } catch (error) {
+        console.error("Error adding training sample:", error);
+        setInfoText(`Error during sample capture: ${error.message}`);
+        // Dispose tensors if an error occurred before addExample
+        if (img && !img.isDisposed) tf.dispose(img); // Should be handled by tidy
+        if (logits && !logits.isDisposed) tf.dispose(logits);
+    }
+    // No finally block needed if tidy handles intermediate tensors
+
+}, [knn, mobilenetModel, setClassExampleCounts, setInfoText]); // Add dependencies
 
     const startTraining = (classId) => {
         if (!stream || trainingIntervalRef.current) return; // Need webcam, don't start if already training
@@ -262,6 +279,8 @@ const saveModel = async () => {
          setIsSavingModel(false); // <<< UNSET SAVING FLAG (in finally)
     }
 };
+
+
 
 
     // Styles

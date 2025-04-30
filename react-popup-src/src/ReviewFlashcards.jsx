@@ -387,27 +387,21 @@ const handleStartReview = async () => {
 
 // Inside ReviewFlashcards.jsx component
 
+// Inside ReviewFlashcards.jsx -> runPrediction useCallback
+
 const runPrediction = useCallback(async () => {
-    // Guard clause: Ensure all necessary components are ready before proceeding.
+    // Keep the guard clause for models being loaded etc.
     if (!videoElement || !isVideoReady || videoElement.readyState < HTMLMediaElement.HAVE_ENOUGH_DATA || !knn || !mobilenetModel || !stream) {
-         // Log if prerequisites are not met when the button is clicked (or if called otherwise)
-         console.log(`Skipping single prediction: Prerequisites not met. videoElement=${!!videoElement}, isVideoReady=${isVideoReady}, readyState=${videoElement?.readyState}, knn=${!!knn}, mobilenet=${!!mobilenetModel}, stream=${!!stream}`);
-        return; // Exit if not ready
+        console.log("Skipping single prediction: Prerequisites not met.");
+        return;
     }
+    console.log(">>> Manual Prediction Triggered (DUMMY TENSOR + DATASET CHECK) <<<");
 
-    // Log that the manual trigger (or any call) has initiated the function
-    console.log(">>> Manual Prediction Triggered (or function called) <<<");
-
-    // Initialize tensor variables to null
-    let frameTensor = null;
-    let logits = null;
+    let dummyTensor = null;
     let result = null;
 
     try {
-        // ---> VVV CREATE DUMMY TENSOR VVV <---
-        // Create a tensor of zeros with the expected shape [1, 1024]
-        // This bypasses MobileNet entirely for this test.
-        dummyTensor = tf.zeros([1, 1024]);
+        dummyTensor = tf.zeros([1, 1024]); // Using dummy tensor for isolation
         console.log(`>>> Created dummyTensor: isDisposed = ${dummyTensor.isDisposed}`);
 
         if (!dummyTensor || dummyTensor.isDisposed) {
@@ -417,30 +411,58 @@ const runPrediction = useCallback(async () => {
         }
 
         console.log(`>>> Before knn.predictClass (dummy): dummyTensor.isDisposed = ${dummyTensor.isDisposed}`);
-        // Predict using the dummy tensor
         result = await knn.predictClass(dummyTensor, 3);
-        console.log(">>> After knn.predictClass returned (dummy).");
+        console.log(">>> After knn.predictClass returned (dummy)."); // This won't be reached if error occurs
 
-        if (result?.label && result.confidences) {
-             const confidenceScore = result.confidences[result.label] || 0;
-             console.log(`>>> Prediction Result (dummy): Label = ${result.label}, Confidence = ${confidenceScore.toFixed(3)}`);
-             // Update state to show dummy result - label might be random but it shouldn't error
-             setCurrentPrediction({ label: `Dummy OK: ${result.label}`, confidence: confidenceScore });
-        } else {
-             console.log(">>> Prediction Result (dummy): Invalid or null.");
-             setCurrentPrediction({ label: 'Dummy Invalid', confidence: 0 });
-        }
+        // Process result if no error (copy from previous working log if needed)
+        if (result?.label && result.confidences) { /* ... process result ... */ }
+        else { /* ... handle invalid result ... */ }
 
     } catch (error) {
-        // Log error specifically for the dummy test
         console.error("Prediction error occurred during DUMMY tensor prediction:", error);
         setCurrentPrediction({ label: 'Dummy Error', confidence: 0 });
+
+        // --- VVV CHECK TRAINING DATASET TENSORS ON ERROR VVV ---
+        console.log("--- Checking KNN Training Dataset Tensors AFTER Error ---");
+        try {
+            if (knn && knn.getNumClasses() > 0) { // Check if KNN and classes exist
+                 const dataset = knn.getClassifierDataset();
+                 if (dataset) {
+                    let disposedFound = false;
+                    for (let classIndex in dataset) {
+                        const classTensor = dataset[classIndex];
+                        if (classTensor) {
+                            // Log disposal state for each class's tensor(s)
+                            console.log(`   Class Index ${classIndex} dataset tensor isDisposed:`, classTensor.isDisposed);
+                            if (classTensor.isDisposed) {
+                                disposedFound = true;
+                            }
+                        } else {
+                            console.log(`   Class Index ${classIndex} dataset tensor is null/undefined.`);
+                        }
+                    }
+                    if (disposedFound) {
+                        console.error(">>> !!! Found disposed tensors within the KNN training dataset! This is likely the cause. !!! <<<");
+                    } else {
+                        console.log(">>> All checked KNN training dataset tensors appear valid (not disposed).");
+                    }
+                } else {
+                     console.log("   KNN dataset is null or empty.");
+                }
+            } else {
+                console.log("   KNN model or classes not available for dataset check.");
+            }
+        } catch (datasetError) {
+             console.error("   Error occurred while checking KNN dataset:", datasetError);
+        }
+        // --- ^^^ END CHECK TRAINING DATASET TENSORS ^^^ ---
+
     } finally {
         // Dispose the dummy tensor
         if (dummyTensor && !dummyTensor.isDisposed) {
             tf.dispose(dummyTensor);
         }
-        console.log(">>> Single prediction function finished (DUMMY TENSOR TEST).");
+        console.log(">>> Single prediction function finished (DUMMY TENSOR + DATASET CHECK).");
     }
 }, [videoElement, isVideoReady, knn, mobilenetModel, stream, setCurrentPrediction]); // Keep dependencies
 
