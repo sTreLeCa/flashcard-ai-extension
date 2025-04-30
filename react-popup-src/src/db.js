@@ -141,8 +141,10 @@ export async function saveGestureModel(knnClassifierInstance, classExampleCounts
     }
 
     // Step 5: Prepare data for IndexedDB
-    const modelDataToSave = { id: 1, test: "hello world" };
-    console.log("DB Util: Data prepared for saving:", JSON.stringify(modelDataToSave).substring(0, 200) + "..."); // Log snippet
+    // VVV UNCOMMENT THIS LINE VVV
+    const modelDataToSave = { id: 1, dataset: serializableDataset, classCounts: classExampleCounts };
+    // VVV Log the actual data being prepared VVV
+    console.log("DB Util: Data prepared for saving:", JSON.stringify(modelDataToSave).substring(0, 300) + "...");
 
     // Step 6: Save to IndexedDB
     console.log("DB Util: Attempting transaction to save gesture model...");
@@ -152,20 +154,26 @@ export async function saveGestureModel(knnClassifierInstance, classExampleCounts
         console.log("DB Util: Transaction obtained."); // <<< LOG
 
         // Add detailed transaction handlers
-        transaction.oncomplete = () => { console.log("DB Util: Save model transaction COMPLETED SUCCESSFULLY."); };
-        transaction.onerror = (e) => { console.error("DB Util: Save model TRANSACTION ERROR:", e.target.error); reject(e.target.error); };
-        transaction.onabort = (e) => { console.warn("DB Util: Save model TRANSACTION ABORTED:", e.target.error); reject(new Error("Save transaction aborted")); };
+        transaction.oncomplete = () => { 
+            console.log("DB Util: Save model transaction COMPLETED SUCCESSFULLY."); 
+        };
+        transaction.onerror = (e) => { 
+            console.error("DB Util: Save model TRANSACTION ERROR:", e.target.error); 
+        }; // Don't reject promise here, let putRequest handle it
+        transaction.onabort = (e) => { 
+            console.warn("DB Util: Save model TRANSACTION ABORTED:", e.target.error); 
+        }; // Don't reject promise here
+
 
         const store = transaction.objectStore(GESTURE_MODEL_STORE_NAME);
-        console.log("DB Util: Store obtained, executing put request..."); // <<< LOG
-        console.log("DB Util: About to execute store.put()...");
+        console.log("DB Util: Store obtained, executing put request...");
         const putRequest = store.put(modelDataToSave);
 
         return new Promise((resolve, reject) => { // Return promise wrapping the request
              console.log("DB Util: Promise for putRequest created."); // <<< LOG
             putRequest.onsuccess = () => {
                  console.log("DB Util: putRequest succeeded. Model saved."); // <<< LOG
-                 resolve();
+                 resolve(); // Resolve on successful put
             };
             putRequest.onerror = (e) => {
                  console.error("DB Util: putRequest failed:", e.target.error); // <<< LOG
