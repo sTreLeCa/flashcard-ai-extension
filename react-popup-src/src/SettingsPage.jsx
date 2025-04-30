@@ -20,6 +20,7 @@ function SettingsPage() {
     const [trainingClass, setTrainingClass] = useState(null); // Which class are we currently adding samples for?
     const [classExampleCounts, setClassExampleCounts] = useState({}); // e.g., {yes: 0, no: 5, hint: 10}
     const trainingIntervalRef = useRef(null); // Ref to hold setInterval ID for capturing
+    const [isSavingModel, setIsSavingModel] = useState(false);
 
     // --- Function to Load Models ---
     const loadModel = useCallback(async (knnInstance) => {
@@ -193,26 +194,37 @@ function SettingsPage() {
     };
 
     // TODO LATER: Function to save KNN dataset to IndexedDB
-    const saveModel = async () => {
-        if (!knn || knn.getNumClasses() === 0) {
-             setInfoText("No training data recorded yet to save.");
-             setTimeout(() => setInfoText(''), 2000);
-             return;
-        }
-        setInfoText("Saving model data...");
-        console.log("SettingsPage: Calling saveGestureModel util...");
-        try {
-             // VVV Call the imported function from db.js VVV
-             await saveGestureModel(knn, classExampleCounts);
-             setInfoText("Gestures saved successfully!");
-             setTimeout(() => setInfoText(''), 2000); // Clear feedback on success
-        } catch (err) {
-             // Handle errors thrown by the saveGestureModel utility
-             setInfoText(`Error saving model: ${err.message}`);
-             console.error("SettingsPage: Error saving model via db util:", err);
-             // Feedback will remain showing the error
-        }
-   };
+   // Replace the ENTIRE existing saveModel function body with this:
+const saveModel = async () => {
+    // Prevent re-entry if already saving
+    if (isSavingModel) {
+        console.log("SettingsPage: Already saving model, skipping.");
+        return;
+    }
+    if (!knn || knn.getNumClasses() === 0) {
+         setInfoText("No training data recorded yet to save.");
+         setTimeout(() => setInfoText(''), 2000);
+         return;
+    }
+
+    setIsSavingModel(true); // <<< SET SAVING FLAG
+    setInfoText("Saving model data...");
+    console.log("SettingsPage: Calling imported saveGestureModel from db.js...");
+
+    try {
+         // Call the imported function from db.js
+         await saveGestureModel(knn, classExampleCounts); // <<< THE ACTUAL CALL
+         setInfoText("Gestures saved successfully!");
+         setTimeout(() => setInfoText(''), 2000); // Clear feedback on success
+    } catch (err) {
+         // Handle errors thrown by the saveGestureModel utility
+         setInfoText(`Error saving model: ${err.message}`);
+         console.error("SettingsPage: Error saving model via db util:", err);
+         // Feedback will remain showing the error
+    } finally {
+         setIsSavingModel(false); // <<< UNSET SAVING FLAG (in finally)
+    }
+};
 
 
     // Styles
@@ -272,11 +284,12 @@ function SettingsPage() {
 
                {/* VVV Add Save Button VVV */}
                <div style={{marginTop: '15px', borderTop: '1px solid #eee', paddingTop: '10px', textAlign: 'center'}}>
-                    <button onClick={saveModel} disabled={Object.keys(classExampleCounts).length === 0 || trainingClass !== null}>
-                       Save Trained Gestures
-                    </button>
-                    {/* TODO LATER: Add Load / Clear Buttons */}
-               </div>
+                    <button onClick={saveModel} disabled={Object.keys(classExampleCounts).length === 0 
+                        || trainingClass !== null || isSavingModel}>
+                        {isSavingModel ? 'Saving...' : 'Save Trained Gestures'} {/* Show saving text */}
+                     </button>
+                     {/* TODO LATER: Add Load / Clear Buttons */}
+                </div>
 
             </div>
         </div>

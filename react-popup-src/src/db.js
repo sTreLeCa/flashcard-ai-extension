@@ -2,16 +2,14 @@
 import * as tf from '@tensorflow/tfjs';
 
 export const DB_NAME = 'flashcardDB';
-export const DB_VERSION = 4; // <<< Use V4 to include gestureModel store
+export const DB_VERSION = 4;
 export const STORE_NAME = 'flashcards';
 export const DECKS_STORE_NAME = 'decks';
-export const GESTURE_MODEL_STORE_NAME = 'gestureModel'; // <<< Add this constant
+export const GESTURE_MODEL_STORE_NAME = 'gestureModel';
 export const UNASSIGNED_DECK_ID = 0;
 
-let dbPromise = null;;
-
-let db; // Variable to hold the database instance
-
+let dbInstance = null; // Hold the actual DB connection instance
+let openingPromise = null
 /**
  * Opens and initializes the IndexedDB database.
  * Returns a Promise that resolves with the database instance when ready.
@@ -19,41 +17,79 @@ let db; // Variable to hold the database instance
  */
 
 export function openDB() {
-    if (dbPromise && dbPromise.readyState !== 'done') { return dbPromise; }
-    console.log(`DB Util: Opening/Requesting DB: ${DB_NAME} v${DB_VERSION}`);
-    dbPromise = new Promise((resolve, reject) => {
-         if (typeof indexedDB === 'undefined') { /* ... */ }
-         const request = indexedDB.open(DB_NAME, DB_VERSION);
+    // If we already have a valid, open connection, return it directly
+    if (dbInstance && dbInstance.objectStoreNames.length > 0) { // Basic check if connection seems valid
+        console.log(`DB Util: Reusing existing DB instance (v${dbInstance.version}).`);
+        return Promise.resolve(dbInstance);
+    }
 
-         request.onupgradeneeded = (event) => {
-             const currentVersion = event.oldVersion;
-             console.log(`DB Util: Upgrade needed from v${currentVersion} to v${DB_VERSION}.`);
-             const tempDb = event.target.result;
-             const transaction = event.target.transaction;
-             if (!transaction) { /* handle error */ reject(new Error("No tx")); return; }
+    // If an opening operation is already in progress, return its promise
+    if (openingPromise) {
+        console.log(`DB Util: Reusing existing opening promise.`);
+        return openingPromise;
+    }
 
-             // Schema updates for V1, V2, V3... (ensure these are present)
-             if (currentVersion < 1 && !tempDb.objectStoreNames.contains(STORE_NAME)) { /* create flashcards */ }
-             if (currentVersion < 2 && !tempDb.objectStoreNames.contains(DECKS_STORE_NAME)) { /* create decks */ }
-             if (currentVersion < 2 && transaction.objectStoreNames.contains(STORE_NAME)) { /* create deckIdIndex */ }
-             if (currentVersion < 3 && transaction.objectStoreNames.contains(STORE_NAME)) { /* migrate null deckId */ }
+    console.log(`DB Util: Starting new DB open request for v${DB_VERSION}...`);
+    openingPromise = new Promise((resolve, reject) => {
+        console.log(`DB Util: Inside new Promise constructor.`); // <<< LOG
+        if (typeof indexedDB === 'undefined') {
+            console.error("DB Util: IndexedDB not supported.");
+            openingPromise = null; // Reset promise state
+            return reject(new Error("IndexedDB not supported"));
+        }
 
-             // --- V4 logic (Ensure this is present) ---
-             if (currentVersion < 4) {
-                  console.log("DB Util: Applying V4 updates (adding gestureModel store).");
-                  if (!tempDb.objectStoreNames.contains(GESTURE_MODEL_STORE_NAME)) {
-                       console.log(`DB Util: Creating store ${GESTURE_MODEL_STORE_NAME}`);
-                       tempDb.createObjectStore(GESTURE_MODEL_STORE_NAME, { keyPath: 'id' });
-                  }
-             }
-              console.log('DB Util: DB onupgradeneeded finished.');
-         }; // End onupgradeneeded
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        console.log(`DB Util: indexedDB.open called.`); // <<< LOG
 
-         request.onsuccess=(e)=>{/* ... */};
-         request.onerror=(e)=>{/* ... */};
-         request.onblocked=(e)=>{/* ... */};
+        request.onupgradeneeded = (event) => {
+            // ... (Keep your full V1, V2, V3, V4 upgrade logic here) ...
+            console.log(`DB Util: onupgradeneeded event fired (Old: ${event.oldVersion}, New: ${event.newVersion}).`);
+            // ... schema changes ...
+            console.log(`DB Util: onupgradeneeded finished processing.`);
+        };
+
+        request.onsuccess = (event) => {
+            console.log("DB Util: request.onsuccess fired."); // <<< LOG
+            dbInstance = event.target.result; // Store the successful connection
+            console.log(`DB Util: DB "${DB_NAME}" connection established (v${dbInstance.version}).`);
+            dbInstance.onversionchange = () => { // Handle external version change requests
+                 console.warn("DB Util: Database version change requested elsewhere. Closing connection.");
+                 dbInstance?.close();
+                 dbInstance = null;
+                 openingPromise = null;
+            };
+            dbInstance.onclose = () => {
+                 console.warn('DB Util: DB connection closed.');
+                 dbInstance = null;
+                 openingPromise = null; // Allow reopening
+            };
+            dbInstance.onerror = (errEvent) => { // Generic handler on the connection
+                 console.error("DB Util: Generic DB connection error:", errEvent.target.error);
+                 // Don't necessarily nullify dbPromise here, maybe connection is still partially usable? Depends.
+            };
+            openingPromise = null; // Clear the opening promise now we have an instance
+            resolve(dbInstance); // Resolve with the DB instance
+            console.log("DB Util: resolve(dbInstance) called."); // <<< LOG
+        };
+
+        request.onerror = (event) => {
+            console.error("DB Util: request.onerror fired:", event.target.error); // <<< LOG
+            openingPromise = null; // Reset promise state on error
+            reject(event.target.error); // Reject the promise
+            console.log("DB Util: reject(error) called from onerror."); // <<< LOG
+        };
+
+        request.onblocked = (event) => {
+            // This implies an upgrade is needed but blocked by another connection
+            console.warn("DB Util: request.onblocked fired. Close other tabs/windows using this extension.", event); // <<< LOG
+            openingPromise = null; // Reset promise state
+            reject(new Error(`Database open blocked (v${DB_VERSION}). Close other tabs.`)); // Reject the promise
+             console.log("DB Util: reject(error) called from onblocked."); // <<< LOG
+       };
+        console.log("DB Util: Event listeners attached to request."); // <<< LOG
     });
-    return dbPromise;
+
+    return openingPromise;
 }
 
 /**
@@ -72,59 +108,73 @@ export async function saveGestureModel(knnClassifierInstance, classExampleCounts
     // Step 1: Get the dataset (references to tensors)
     const dataset = knnClassifierInstance.getClassifierDataset();
     const serializableDataset = {};
-    const tensorsToDispose = []; // Keep track of tensors to dispose later
+    const tensorsToDispose = [];
+    let processingError = false;
 
     // Step 2: Extract data and shape from tensors *before* disposing
     for (const classIndex in dataset) {
         const dataTensor = dataset[classIndex];
         if (dataTensor) {
             try {
-                // dataSync() is synchronous, so we get the data immediately
                 const dataAsArray = Array.from(dataTensor.dataSync());
                 serializableDataset[classIndex] = { data: dataAsArray, shape: dataTensor.shape };
-                // Add the tensor to the list to be disposed later
                 tensorsToDispose.push(dataTensor);
             } catch (e) {
-                console.error(`Error processing tensor for class ${classIndex}`, e);
-                // If one tensor fails, we might want to abort the whole save
-                // Dispose any tensors we collected so far
-                tensorsToDispose.forEach(t => t.dispose());
+                console.error(`DB Util: Error processing tensor for class ${classIndex}`, e);
+                processingError = true;
+                tensorsToDispose.forEach(t => t.dispose()); // Dispose already collected tensors
                 throw new Error(`Failed to process tensor for class ${classIndex}: ${e.message}`);
             }
         } else {
-            console.warn(`Tensor data for class index ${classIndex} is null/undefined.`);
+            console.warn(`DB Util: Tensor data for class index ${classIndex} is null/undefined.`);
         }
     }
 
-    // Step 3: Dispose all original tensors now that we have the data copied
+    // Step 3: Dispose all original tensors
     tensorsToDispose.forEach(t => t.dispose());
     console.log("DB Util: Original tensors disposed.");
 
-    // Step 4: Check if we actually got any data
-    if (Object.keys(serializableDataset).length === 0) {
-         console.warn("DB Util: Serializable dataset is empty after processing.");
-         throw new Error("Failed to serialize training data.");
+    // Step 4: Check if we actually got any data or if processing failed
+    if (Object.keys(serializableDataset).length === 0 || processingError) {
+         console.warn("DB Util: Serializable dataset empty or processing error occurred.");
+         throw new Error("Failed to serialize training data or processing error.");
     }
 
     // Step 5: Prepare data for IndexedDB
-    const modelDataToSave = { id: 1, dataset: serializableDataset, classCounts: classExampleCounts };
+    const modelDataToSave = { id: 1, test: "hello world" };
+    console.log("DB Util: Data prepared for saving:", JSON.stringify(modelDataToSave).substring(0, 200) + "..."); // Log snippet
 
     // Step 6: Save to IndexedDB
-    console.log("DB Util: Attempting to save gesture model to IndexedDB...");
+    console.log("DB Util: Attempting transaction to save gesture model...");
     try {
-        const db = await openDB();
+        const db = await openDB(); // Call the exported openDB function
         const transaction = db.transaction(GESTURE_MODEL_STORE_NAME, 'readwrite');
+        console.log("DB Util: Transaction obtained."); // <<< LOG
+
+        // Add detailed transaction handlers
+        transaction.oncomplete = () => { console.log("DB Util: Save model transaction COMPLETED SUCCESSFULLY."); };
+        transaction.onerror = (e) => { console.error("DB Util: Save model TRANSACTION ERROR:", e.target.error); reject(e.target.error); };
+        transaction.onabort = (e) => { console.warn("DB Util: Save model TRANSACTION ABORTED:", e.target.error); reject(new Error("Save transaction aborted")); };
+
         const store = transaction.objectStore(GESTURE_MODEL_STORE_NAME);
+        console.log("DB Util: Store obtained, executing put request..."); // <<< LOG
+        console.log("DB Util: About to execute store.put()...");
         const putRequest = store.put(modelDataToSave);
 
-        return new Promise((resolve, reject) => { // Return promise wrapping the DB operation
-            putRequest.onsuccess = () => { console.log("DB Util: Model saved to IndexedDB."); resolve(); };
-            putRequest.onerror = (e) => { console.error("DB Util: Error saving model:", e.target.error); reject(e.target.error); };
-            transaction.oncomplete = () => { console.log("DB Util: Save model transaction complete."); };
-            transaction.onerror = (e) => { console.error("DB Util: Save model Tx Error:", e.target.error); reject(e.target.error); }; // Reject on tx error too
+        return new Promise((resolve, reject) => { // Return promise wrapping the request
+             console.log("DB Util: Promise for putRequest created."); // <<< LOG
+            putRequest.onsuccess = () => {
+                 console.log("DB Util: putRequest succeeded. Model saved."); // <<< LOG
+                 resolve();
+            };
+            putRequest.onerror = (e) => {
+                 console.error("DB Util: putRequest failed:", e.target.error); // <<< LOG
+                 reject(e.target.error);
+            };
+            // Note: Transaction handlers defined outside promise are still active
         });
     } catch (err) {
-         console.error("DB Util: DB Error during save model setup:", err);
+         console.error("DB Util: DB Error during save model setup/execution:", err);
          throw new Error(`DB Error saving model: ${err.message}`); // Re-throw error
     }
 }
@@ -140,6 +190,7 @@ export async function loadGestureModel(knnClassifierInstance) {
         return {}; // Return empty counts if no KNN instance
     }
     console.log("DB Util: Attempting to load gesture model...");
+    try {
     const db = await openDB();
     if (!db.objectStoreNames.contains(GESTURE_MODEL_STORE_NAME)) {
         console.log("DB Util: Gesture model store doesn't exist yet.");
@@ -148,12 +199,16 @@ export async function loadGestureModel(knnClassifierInstance) {
 
     const transaction = db.transaction(GESTURE_MODEL_STORE_NAME, 'readonly');
     const store = transaction.objectStore(GESTURE_MODEL_STORE_NAME);
+    console.log("DB Util: Requesting data with key 1...");
     const getRequest = store.get(1); // Get model data using fixed ID 1
 
     return new Promise((resolve, reject) => {
+        console.log("DB Util: Promise for getRequest created."); // <<< ADD LOG
         getRequest.onsuccess = () => {
+            console.log("DB Util: getRequest succeeded.");
             const savedData = getRequest.result;
             if (savedData?.dataset && Object.keys(savedData.dataset).length > 0) {
+                console.log("DB Util: Found saved model data, processing...");
                 console.log("DB Util: Found saved model data.");
                 const tensors = {}; let success = true;
                 Object.entries(savedData.dataset).forEach(([classIndex, dataObj]) => {
@@ -166,10 +221,16 @@ export async function loadGestureModel(knnClassifierInstance) {
                       Object.values(tensors).forEach(tensor => tensor?.dispose());
                       resolve(savedData.classCounts || {}); // Return loaded counts
                  } else { console.warn("DB Util: Saved dataset empty/invalid."); Object.values(tensors).forEach(tensor => tensor?.dispose()); resolve({}); }
-            } else { console.log("DB Util: No saved model data found."); resolve({}); } // Return empty counts
+            } else {
+                console.log("DB Util: No valid saved model data found in result."); // <<< ADD LOG
+                 console.log("DB Util: No saved model data found."); 
+                 resolve({}); } // Return empty counts
         };
         getRequest.onerror = (e) => { console.error("DB Util: Error loading saved model:", e.target.error); reject(e.target.error); }; // Reject on error
         transaction.oncomplete = () => { console.log("DB Util: Load model transaction complete."); };
         transaction.onerror = (e) => { console.error("DB Util: Load model Tx Error:", e.target.error); reject(e.target.error); };
-    });
+    });} catch (err) {
+        console.error("DB Util: Error during load model (maybe openDB failed?):", err); // <<< ADD LOG
+        return {}; // Return empty on error
+   }
 }
