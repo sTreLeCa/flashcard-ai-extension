@@ -1,22 +1,22 @@
 // react-popup-src/src/ReviewFlashcards.jsx
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+// VVV Ensure TFJS imports are present VVV
 import * as tf from '@tensorflow/tfjs';
 import * as mobilenet from '@tensorflow-models/mobilenet';
 import * as knnClassifier from '@tensorflow-models/knn-classifier';
-// VVV Import DB functions VVV (Adjust path if needed)
-import { openDB, loadGestureModel, STORE_NAME } from './db.js';
+// VVV Ensure DB imports are present VVV
+import { openDB, loadGestureModel, STORE_NAME, GESTURE_MODEL_STORE_NAME, UNASSIGNED_DECK_ID } from './db.js'; // Assuming V4 DB
 
-const MIN_BUCKET = 0;
-const MAX_BUCKET = 5;
-const BUCKET_INTERVALS = [0, 1, 3, 7, 14, 30];
-const GESTURE_MODEL_LOADED_STATE = { // To track loading states
-    IDLE: 'idle',
-    LOADING: 'loading',
-    LOADED: 'loaded',
-    FAILED: 'failed'
-};
-function ReviewFlashcards({ decks, setFeedback}) {
-    // States for review functionality
+
+// Constants
+const MIN_BUCKET = 0; /* ... */ const MAX_BUCKET = 5; /* ... */ const BUCKET_INTERVALS = [0, 1, 3, 7, 14, 30];
+const GESTURE_MODEL_LOADED_STATE = { IDLE: 'idle', LOADING: 'loading', LOADED: 'loaded', FAILED: 'failed' };
+
+// Component Definition
+function ReviewFlashcards({ decks, setFeedback }) { // Use setFeedback prop from App
+
+    // --- State Variables ---
+    // Keep existing review state...
     const [selectedDeckId, setSelectedDeckId] = useState('');
     const [deckCards, setDeckCards] = useState([]);
     const [isLoadingCards, setIsLoadingCards] = useState(false);
@@ -24,112 +24,184 @@ function ReviewFlashcards({ decks, setFeedback}) {
     const [showAnswer, setShowAnswer] = useState(false);
     const [reviewActive, setReviewActive] = useState(false);
     const [reviewComplete, setReviewComplete] = useState(false);
-    const [stats, setStats] = useState({ correct: 0, incorrect: 0, hard: 0, total: 0 }); // Added hard to stats
-    const [sessionLimit, setSessionLimit] = useState(20); // Default limit to 20, 0 means no limit
-    const [feedbackAnimation, setFeedbackAnimation] = useState(null); // 'correct', 'incorrect', 'hard', or null
-    const [hintUsed, setHintUsed] = useState(false); // Track if hint was used for the current card
-    const [hintText, setHintText] = useState(''); // Store generated hint text
-    const videoRef = useRef(null);
-    const [stream, setStream] = useState(null);
-    const [webcamError, setWebcamError] = useState('');
-    const [knn, setKnn] = useState(null); // KNN Classifier instance
-    const [mobilenetModel, setMobilenetModel] = useState(null); // MobileNet model instance
-    const [gestureModelLoadState, setGestureModelLoadState] = useState(GESTURE_MODEL_LOADED_STATE.IDLE);
-    const [loadedClassCounts, setLoadedClassCounts] = useState({}); // Store loaded counts
-    const predictionIntervalRef = useRef(null); // For prediction loop
-    const [currentPrediction, setCurrentPrediction] = useState({ label: '...', confidence: 0 }); // To display prediction
+    const [stats, setStats] = useState({ correct: 0, incorrect: 0, hard: 0, total: 0 });
+    const [sessionLimit, setSessionLimit] = useState(20);
+    const [feedbackAnimation, setFeedbackAnimation] = useState(null);
+    const [hintUsed, setHintUsed] = useState(false);
+    const [hintText, setHintText] = useState('');
+    // Add with other state
+    const [isVideoReady, setIsVideoReady] = useState(false);
+
+    // --- State/Refs for Webcam and TFJS (Copied/Adapted from SettingsPage) ---
+    const videoRef = useRef(null); // <<< ADD
+    const [stream, setStream] = useState(null); // <<< ADD
+    const [webcamError, setWebcamError] = useState(''); // <<< ADD
+    const [knn, setKnn] = useState(null); // <<< ADD
+    const [mobilenetModel, setMobilenetModel] = useState(null); // <<< ADD
+    const [gestureModelLoadState, setGestureModelLoadState] = useState(GESTURE_MODEL_LOADED_STATE.IDLE); // <<< ADD
+    const [loadedClassCounts, setLoadedClassCounts] = useState({}); // <<< ADD (To know if model is trained)
+    const predictionIntervalRef = useRef(null); // <<< ADD
+    const [currentPrediction, setCurrentPrediction] = useState({ label: '...', confidence: 0 }); // <<< ADD
 
     // --- Load Models (MobileNet & KNN) ---
-    const loadModelsAndData = useCallback(async () => {
-        if (gestureModelLoadState !== GESTURE_MODEL_LOADED_STATE.IDLE) {
-            console.log("Review: Models/data already loading or loaded.");
-            return; // Don't reload if already attempted
-        }
-        setGestureModelLoadState(GESTURE_MODEL_LOADED_STATE.LOADING);
-        setFeedback("Loading recognition models..."); // Use shared feedback
-        console.log("Review: Loading models...");
-        try {
-            await tf.ready();
-            console.log("Review: TFJS Backend:", tf.getBackend());
-
-            const mobilenetInstance = await mobilenet.load();
-            setMobilenetModel(mobilenetInstance);
-            console.log("Review: MobileNet loaded.");
-
-            const knnInstance = knnClassifier.create();
-            // --- Load saved data into KNN ---
-            const loadedCounts = await loadGestureModel(knnInstance); // Call imported DB function
-            setKnn(knnInstance);
-            setLoadedClassCounts(loadedCounts || {}); // Store the loaded counts
-            console.log("Review: KNN Classifier created and loaded data. Counts:", loadedCounts);
-            // --- End Load ---
-
-            setGestureModelLoadState(GESTURE_MODEL_LOADED_STATE.LOADED);
-            setFeedback("Recognition models loaded."); // Update feedback
-            setTimeout(() => setFeedback(''), 1500); // Clear feedback
-
-        } catch (error) {
-            console.error("Review: Error loading models/data:", error);
-            setFeedback(`Error loading models: ${error.message}`);
-            setGestureModelLoadState(GESTURE_MODEL_LOADED_STATE.FAILED);
-            setMobilenetModel(null); // Reset models on failure
-            setKnn(null);
-        }
-    }, [gestureModelLoadState, setFeedback]); // Added dependencies
-
-    // Load models when component mounts
-    useEffect(() => {
-        loadModelsAndData();
-    }, [loadModelsAndData]);
+        // --- Load Models (MobileNet & KNN Data) ---
+        const loadModelsAndData = useCallback(async () => {
+            if (gestureModelLoadState !== GESTURE_MODEL_LOADED_STATE.IDLE) return;
+            setGestureModelLoadState(GESTURE_MODEL_LOADED_STATE.LOADING);
+            console.log("Review: Loading models...");
+            setFeedback("Loading recognition models..."); // Update shared feedback
+    
+            let knnInstance = null; // Temporary instance
+    
+            try {
+                await tf.ready();
+                console.log("Review: TFJS Backend:", tf.getBackend());
+                const mobilenetLoadPromise = mobilenet.load(); // Start loading mobilenet
+                knnInstance = knnClassifier.create(); // Create KNN instance
+                setKnn(knnInstance); // Set state early
+                console.log("Review: KNN Classifier created.");
+    
+                // Load saved KNN data into the instance
+                const loadedCounts = await loadGestureModel(knnInstance); // Call imported function
+                setLoadedClassCounts(loadedCounts || {});
+                console.log("Review: KNN Classifier data loaded. Counts:", loadedCounts);
+    
+                // Wait for mobilenet to finish loading
+                const mobilenetInstance = await mobilenetLoadPromise;
+                setMobilenetModel(mobilenetInstance);
+                console.log("Review: MobileNet loaded.");
+    
+                setGestureModelLoadState(GESTURE_MODEL_LOADED_STATE.LOADED);
+                setFeedback("Recognition models ready.");
+                setTimeout(() => setFeedback(''), 1500);
+    
+            } catch (error) {
+                console.error("Review: Error loading models/data:", error);
+                setFeedback(`Error loading models: ${error.message}`);
+                setGestureModelLoadState(GESTURE_MODEL_LOADED_STATE.FAILED);
+                setMobilenetModel(null); setKnn(null); // Reset on failure
+            }
+        }, [gestureModelLoadState, setFeedback]); // Dependencies
+    
+        // Load models when component first mounts
+        useEffect(() => {
+            loadModelsAndData();
+        }, [loadModelsAndData]); // Run once
 
     // --- Webcam Control Functions ---
-    const startWebcam = useCallback(async () => { // Added useCallback
-        setWebcamError('');
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-            try {
-                console.log("Review: Requesting webcam...");
-                const mediaStream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 320 }, height: { ideal: 240 } } });
-                console.log("Review: Webcam access granted.");
-                setStream(mediaStream);
-                if (videoRef.current) { videoRef.current.srcObject = mediaStream; }
-            } catch (err) {
-                 console.error("Review: Error accessing webcam:", err);
-                 let errMsg = "Webcam Error"; /* ... error message generation ... */
-                 setWebcamError(errMsg); setStream(null);
+        // --- Webcam Control Functions ---
+        const startWebcam = useCallback(async () => {
+            setWebcamError('');
+            setVideoReady(false);
+        
+            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                try {
+                    const mediaStream = await navigator.mediaDevices.getUserMedia({
+                        video: {
+                            width: { ideal: 320 },
+                            height: { ideal: 240 },
+                            facingMode: 'user'
+                        }
+                    });
+        
+                    console.log("Review: Webcam access granted, stream created:", mediaStream.id);
+                    setStream(mediaStream);
+        
+                    // 🔥 Force-attach stream to video element here
+                    if (videoRef.current) {
+                        console.log("Review: Attaching stream directly to videoRef.");
+                        videoRef.current.srcObject = mediaStream;
+        
+                        try {
+                            await videoRef.current.play();
+                            console.log("Review: videoRef.play() succeeded.");
+                        } catch (e) {
+                            console.error("Review: videoRef.play() failed:", e);
+                            setWebcamError(`Playback error: ${e.message}`);
+                        }
+                    } else {
+                        console.warn("Review: videoRef.current is still null when attaching stream.");
+                    }
+        
+                    return mediaStream;
+                } catch (err) {
+                    console.error("Review: Error accessing webcam:", err);
+                    let errMsg = "Webcam Error";
+                    if (err.name === "NotAllowedError") errMsg = "Webcam permission denied.";
+                    else if (err.name === "NotFoundError") errMsg = "No webcam found.";
+                    else errMsg = `Webcam Error: ${err.message}`;
+                    setWebcamError(errMsg);
+                    setStream(null);
+                    return null;
+                }
+            } else {
+                setWebcamError("Webcam access not supported.");
+                setStream(null);
+                return null;
             }
-        } else { setWebcamError("Webcam access not supported."); setStream(null); }
-    }, []); // Empty dependency array for startWebcam
+        }, []);
+        
+    
+        const stopWebcam = useCallback(() => {
+            // Stop prediction interval first
+            if (predictionIntervalRef.current) { clearInterval(predictionIntervalRef.current); predictionIntervalRef.current = null; console.log("Review: Stopped prediction loop."); }
+            if (stream) { console.log("Review: Stopping webcam."); stream.getTracks().forEach(track => track.stop()); setStream(null); if (videoRef.current) 
+                { videoRef.current.srcObject = null; }}
+            setCurrentPrediction({ label: '...', confidence: 0 });
+        }, [stream]);
+    
+        // --- Cleanup Webcam on Unmount ---
+        useEffect(() => { return () => { stopWebcam(); }; }, [stopWebcam]);
+    
 
-    const stopWebcam = useCallback(() => {
-        // Stop prediction interval if running
-        if (predictionIntervalRef.current) {
-            clearInterval(predictionIntervalRef.current);
-            predictionIntervalRef.current = null;
-            console.log("Review: Stopped prediction loop.");
-        }
-        // Stop stream tracks
-        if (stream) {
-            console.log("Review: Stopping webcam.");
-            stream.getTracks().forEach(track => track.stop());
-            setStream(null);
-            if (videoRef.current) { videoRef.current.srcObject = null; }
-        }
-        setCurrentPrediction({ label: '...', confidence: 0 }); // Reset prediction display
-    }, [stream]); // Dependency on stream
-
-    // --- Cleanup Webcam on Unmount or when Review Ends ---
-    useEffect(() => {
-        return () => {
-            stopWebcam(); // Ensure webcam stops if component unmounts
-        };
-    }, [stopWebcam]);
-
-    // Stop webcam when review session ends
-    useEffect(() => {
-        if (reviewComplete || !reviewActive) {
-            stopWebcam();
-        }
-    }, [reviewComplete, reviewActive, stopWebcam]);
+        const handleVideoPlay = useCallback(() => {
+            console.log("Review: Video playing event - video dimensions:", 
+                videoRef.current?.videoWidth, "x", videoRef.current?.videoHeight);
+            setVideoReady(true);
+        }, []);
+        
+        const handleVideoError = useCallback((e) => {
+            console.error("Review: Video element error:", e);
+            setWebcamError(`Video element error: ${e.target.error?.message || "Unknown error"}`);
+            setVideoReady(false);
+        }, []);
+        
+        // --- NEW useEffect to connect stream to video element ---
+        useEffect(() => {
+            const tryAttachStream = async () => {
+                const videoNode = videoRef.current;
+        
+                if (stream && videoNode) {
+                    console.log("Review: Stream and video element ready. Attaching...");
+        
+                    // Add event listeners
+                    videoNode.addEventListener('playing', handleVideoPlay);
+                    videoNode.addEventListener('error', handleVideoError);
+        
+                    // Set the video stream
+                    if (videoNode.srcObject !== stream) {
+                        videoNode.srcObject = stream;
+                        try {
+                            await videoNode.play();
+                            console.log("Review: Video play() succeeded.");
+                        } catch (e) {
+                            console.error("Review: video.play() failed:", e);
+                            setWebcamError(`Video playback error: ${e.message}`);
+                        }
+                    }
+        
+                    return () => {
+                        videoNode.removeEventListener('playing', handleVideoPlay);
+                        videoNode.removeEventListener('error', handleVideoError);
+                    };
+                } else {
+                    console.log(`Review: Waiting for stream/video... Stream: ${!!stream}, VideoRef: ${!!videoRef.current}`);
+                }
+            };
+        
+            tryAttachStream();
+        }, [stream, handleVideoPlay, handleVideoError]);
+        
 
     // Fetch cards for the selected deck
     const fetchCardsForDeck = useCallback(async (deckId) => {
@@ -248,72 +320,69 @@ function ReviewFlashcards({ decks, setFeedback}) {
     }, [sessionLimit, setFeedback]); // Add sessionLimit dependency
 
     // Start the review session
-    const handleStartReview = async () => { // Made async
+    const handleStartReview = async () => {
         if (!selectedDeckId) { setFeedback('Please select a deck first.'); return; }
-        if (gestureModelLoadState !== GESTURE_MODEL_LOADED_STATE.LOADED) {
-             setFeedback('Recognition models still loading or failed. Please wait or check settings.');
-             return;
+        if (gestureModelLoadState === GESTURE_MODEL_LOADED_STATE.LOADING) { setFeedback('Models loading...'); return; }
+        if (gestureModelLoadState !== GESTURE_MODEL_LOADED_STATE.LOADED) { setFeedback('Models failed to load.'); return; }
+
+        setReviewComplete(false); // Reset complete state
+        setReviewActive(false);   // Reset active state initially
+        setFeedback('Starting webcam...');
+        const webcamStream = await startWebcam(); // Start webcam
+
+        if (webcamStream) { // Check if webcam started successfully
+            setFeedback('Loading cards...');
+            fetchCardsForDeck(selectedDeckId); // Fetch cards (will set reviewActive=true on success)
+        } else {
+            setFeedback(`Webcam error: ${webcamError || 'Could not start webcam.'}`);
         }
-        // Start webcam first
-        await startWebcam(); // Wait for webcam attempt
-        // Fetch cards only if webcam started successfully (stream is set)
-         // Check stream state *after* awaiting startWebcam result
-         if (navigator.mediaDevices && await navigator.mediaDevices.getUserMedia({video: true}).then(s => {s.getTracks().forEach(t=>t.stop()); return true;}).catch(()=>false)) {
-             fetchCardsForDeck(selectedDeckId); // Fetch cards for the selected deck
-         } else {
-              // Error handled by startWebcam setting webcamError state
-              setFeedback("Webcam needed for review. Please grant permission or ensure camera is working.");
-         }
     };
 
     const runPrediction = useCallback(async () => {
-        if (!knn || !mobilenetModel || !videoRef.current || !stream || videoRef.current.readyState < 3 || videoRef.current.videoWidth === 0) {
-            // console.log("Prediction prerequisites not met."); // Too noisy
-            return; // Exit if models/video aren't ready
+        // Ensure everything needed is ready
+        if (!knn || !mobilenetModel || !videoRef.current || !stream || videoRef.current.readyState < 3 || videoRef.current.videoWidth === 0 || knn.getNumClasses() === 0) {
+            return;
         }
+
+        let frameTensor = null; let logits = null; let keptLogits = null; let result = null;
 
         try {
-            const img = tf.browser.fromPixels(videoRef.current);
-            const logits = mobilenetModel.infer(img, true);
-            const result = await knn.predictClass(logits, 3); // Predict top 3 classes
+            // DEBUG: draw video to canvas
+const debugCanvas = document.getElementById('debug-canvas');
+if (debugCanvas) {
+    const ctx = debugCanvas.getContext('2d');
+    ctx.drawImage(videoRef.current, 0, 0, debugCanvas.width, debugCanvas.height);
+}
 
-            // Update prediction state for UI display
-            if (result && result.label && result.confidences) {
-                 setCurrentPrediction({
-                    label: result.label,
-                    confidence: result.confidences[result.label] || 0
-                 });
+// Use the canvas as the source for fromPixels
+frameTensor = tf.browser.fromPixels(debugCanvas);
 
-                 // TODO: Add logic here to check confidence/stability
-                 // and trigger handleResponse() or handleHint()
-                 // e.g., if (result.label === 'yes' && result.confidences[result.label] > 0.95) { handleResponse('correct'); }
+            logits = mobilenetModel.infer(frameTensor, true);
+            keptLogits = tf.keep(logits); // Keep the tensor
 
-            } else {
-                 setCurrentPrediction({ label: '...', confidence: 0 });
-            }
+            result = await knn.predictClass(keptLogits, 3); // Predict with kept tensor
 
-            // Dispose tensors
-            img.dispose();
-            logits.dispose();
+            if (result?.label && result.confidences) {
+                 setCurrentPrediction({ label: result.label, confidence: result.confidences[result.label] || 0 });
+                 // TODO LATER: Trigger Action Logic
+            } else { setCurrentPrediction({ label: '...', confidence: 0 }); }
 
         } catch (error) {
-            console.error("Error during prediction:", error);
-            setCurrentPrediction({ label: 'Error', confidence: 0 });
-            // Maybe stop prediction loop on error?
-            // stopWebcam();
-            // setWebcamError("Prediction failed.");
+            console.error("Prediction error:", error); setCurrentPrediction({ label: 'Error', confidence: 0 });
+        } finally {
+            tf.dispose([frameTensor, logits, keptLogits]); // Dispose all created tensors
         }
-    }, [knn, mobilenetModel, stream]);
+    }, [knn, mobilenetModel, stream]); // Dependencies
 
+    // --- Effect to Start/Stop Prediction Loop ---
     useEffect(() => {
-        if (reviewActive && !reviewComplete && stream && knn && mobilenetModel) {
+        // Start loop ONLY if review is active, not complete, stream exists, and models are loaded/trained
+        if (reviewActive && !reviewComplete && stream && knn && mobilenetModel && knn.getNumClasses() > 0) {
             console.log("Review: Starting prediction loop.");
-            // Clear previous interval just in case
             if (predictionIntervalRef.current) clearInterval(predictionIntervalRef.current);
-            // Start predicting repeatedly
-            predictionIntervalRef.current = setInterval(runPrediction, 200); // Adjust interval as needed (e.g., 100-500ms)
+            predictionIntervalRef.current = setInterval(runPrediction, 200); // Adjust interval as needed
         } else {
-            // Stop prediction loop if review ends, webcam stops, or models unload
+            // Stop the loop otherwise
             if (predictionIntervalRef.current) {
                  console.log("Review: Stopping prediction loop.");
                  clearInterval(predictionIntervalRef.current);
@@ -321,12 +390,7 @@ function ReviewFlashcards({ decks, setFeedback}) {
             }
         }
         // Cleanup interval on unmount or when dependencies change
-        return () => {
-            if (predictionIntervalRef.current) {
-                clearInterval(predictionIntervalRef.current);
-                predictionIntervalRef.current = null;
-            }
-        };
+        return () => { if (predictionIntervalRef.current) { clearInterval(predictionIntervalRef.current); predictionIntervalRef.current = null; }};
     }, [reviewActive, reviewComplete, stream, knn, mobilenetModel, runPrediction]);
     // Generate hint from answer text
     const generateHint = (answerText) => {
@@ -367,7 +431,19 @@ function ReviewFlashcards({ decks, setFeedback}) {
 
         // Show visual feedback animation based on the *button pressed*, not effective rating
         setFeedbackAnimation(rating);
-        setTimeout(() => setFeedbackAnimation(null), 800); // Clear animation
+        setTimeout(async () => {
+            const webcamStream = await startWebcam();
+            
+            if (webcamStream) {
+                console.log("Review: Webcam started successfully, loading cards...");
+                setFeedback('Loading cards...');
+                fetchCardsForDeck(selectedDeckId);
+            } else {
+                console.error("Review: Webcam failed to start:", webcamError);
+                setFeedback(`Webcam error: ${webcamError || 'Could not start webcam.'}`);
+            }
+        }, 400); // was 100ms
+         // Clear animation
 
         const currentCard = deckCards[currentCardIndex];
 
@@ -477,18 +553,20 @@ function ReviewFlashcards({ decks, setFeedback}) {
 
     // Reset the review state
     const handleResetReview = () => {
-        // Keep selected deck for convenience
+        console.log("ReviewFlashcards: Resetting review.");
+        stopWebcam(); // <<< Ensure webcam stops on reset
+        // setSelectedDeckId(''); // Optionally reset deck selection
         setDeckCards([]);
         setCurrentCardIndex(0);
         setShowAnswer(false);
         setReviewActive(false);
         setReviewComplete(false);
         setStats({ correct: 0, incorrect: 0, hard: 0, total: 0 });
-        setFeedback(''); // Clear feedback
+        setFeedback('');
         setFeedbackAnimation(null);
         setHintUsed(false);
-        setHintText(''); // Clear hint text
-        setIsLoadingCards(false); // Ensure loading state is reset
+        setHintText('');
+        setIsLoadingCards(false);
     };
 
     // Handle keyboard shortcuts
@@ -598,7 +676,14 @@ function ReviewFlashcards({ decks, setFeedback}) {
             default: return baseStyle;
         }
     };
-    const reviewVideoStyle = { width: '80%', maxWidth: '200px', border: '1px solid #ccc', display: 'block', margin: '10px auto', backgroundColor: '#333' };
+    const reviewVideoStyle = { 
+        width: '80%', 
+        maxWidth: '200px', 
+        border: '1px solid #ccc', 
+        display: 'block', 
+        margin: '10px auto', 
+        backgroundColor: '#333' 
+        };
     const predictionStyle = { fontSize: '0.9em', textAlign: 'center', marginTop: '5px', color: '#333', minHeight: '1.2em' };
 
     return (
@@ -653,26 +738,47 @@ function ReviewFlashcards({ decks, setFeedback}) {
             )}
 
             {/* --- Review Session Active --- */}
-            {reviewActive && deckCards.length > 0 && currentCardIndex < deckCards.length && (
+            {reviewActive && !isLoadingCards && deckCards.length > 0 && currentCardIndex < deckCards.length && (
                 <div style={sectionStyle}>
                     <h4>Card {currentCardIndex + 1} of {deckCards.length}</h4>
-                    {stream && (
-                        <>
-                            <video ref={videoRef} autoPlay playsInline muted style={reviewVideoStyle}></video>
-                            <p style={predictionStyle}>
-                                Detected: {currentPrediction.label} ({(currentPrediction.confidence * 100).toFixed(1)}%)
-                            </p>
-                        </>
-                    )}
-                    {webcamError && <p style={{color: 'red', textAlign: 'center'}}>{webcamError}</p>}
-                    {/* Show message if model loading failed */}
-                    {gestureModelLoadState === GESTURE_MODEL_LOADED_STATE.FAILED &&
-                        <p style={{color: 'red', textAlign: 'center'}}>Failed to load gesture model. Gestures disabled.</p>
-                    }
-                     {/* Show message if no model loaded or insufficient samples */}
-                    {gestureModelLoadState === GESTURE_MODEL_LOADED_STATE.LOADED && (!knn || knn.getNumClasses() === 0) &&
-                        <p style={{color: 'orange', textAlign: 'center', fontSize: '0.9em'}}>No gestures trained yet. Go to Settings to train.</p>
-                    }
+
+                    {/* VVV Add Webcam & Prediction Display VVV */}
+                    <div style={{marginBottom: '15px'}}>
+        
+                    {reviewActive && (
+    <>
+        <video
+            ref={videoRef}
+            width="320"
+            height="240"
+            autoPlay
+            muted
+            style={reviewVideoStyle}
+        ></video>
+
+        <canvas
+            id="debug-canvas"
+            width="320"
+            height="240"
+            style={{ display: 'block', margin: '10px auto', border: '1px solid #ccc' }}
+        ></canvas>
+    </>
+)}
+    
+
+                         {webcamError && <p style={{color: 'red', textAlign: 'center', fontSize: '0.9em'}}>{webcamError}</p>}
+                         {gestureModelLoadState === GESTURE_MODEL_LOADED_STATE.LOADING && <p style={{textAlign: 'center', fontSize: '0.9em'}}>Loading model...</p>}
+                         {gestureModelLoadState === GESTURE_MODEL_LOADED_STATE.FAILED && <p style={{color: 'red', textAlign: 'center', fontSize: '0.9em'}}>Model load failed.</p>}
+                         {stream && knn && knn.getNumClasses() > 0 && (
+                             <p style={predictionStyle}>
+                                 Detected: {currentPrediction.label} ({(currentPrediction.confidence * 100).toFixed(1)}%)
+                             </p>
+                         )}
+                         {stream && knn && knn.getNumClasses() === 0 && gestureModelLoadState === GESTURE_MODEL_LOADED_STATE.LOADED && (
+                             <p style={{...predictionStyle, color: 'orange'}}>No gestures trained yet!</p>
+                         )}
+                    </div>
+                    {/* ^^^ End Webcam & Prediction Display ^^^ */}
                     <div style={getCardStyle()}>
                         {/* --- Front / Question --- */}
                         <div style={{ marginBottom: showAnswer ? '20px' : '0' }}> {/* Add space if answer is shown */}
