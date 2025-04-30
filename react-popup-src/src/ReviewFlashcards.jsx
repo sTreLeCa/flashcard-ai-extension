@@ -15,6 +15,9 @@ const GESTURE_MODEL_LOADED_STATE = { IDLE: 'idle', LOADING: 'loading', LOADED: '
 // Component Definition
 function ReviewFlashcards({ decks, setFeedback }) { // Use setFeedback prop from App
 
+    const GESTURE_CONFIDENCE_THRESHOLD = 0.85;
+    const [detectedGesture, setDetectedGesture] = useState(null);
+
     // --- State Variables ---
     // Keep existing review state...
     const [selectedDeckId, setSelectedDeckId] = useState('');
@@ -106,32 +109,38 @@ const [videoElement, setVideoElement] = useState(null);
                         facingMode: 'user'
                     }
                 });
-        
                 console.log("🎥 Webcam access granted:", mediaStream.id);
-                setStream(mediaStream); // DO NOT touch videoRef here
+         setStream(mediaStream); // Set stream state triggers re-render
+         return mediaStream;
             } catch (err) {
                 console.error("❌ Webcam error:", err);
                 setWebcamError(`Webcam error: ${err.message}`);
+                setStream(null);
+                return null; // <<< RETURN NULL on failure
             }
         }, []);
         
         
 
         // --- useEffect to connect stream if video already exists ---
+// Inside ReviewFlashcards.jsx
+// Inside ReviewFlashcards.jsx
 useEffect(() => {
-    // Runs when stream changes
-    if (stream && videoElement) { // Check if BOTH are ready
-        console.log("Review: useEffect[stream] - Stream updated AND video element exists. Setting srcObject/playing.");
-        if (videoElement.srcObject !== stream) { // Avoid redundant sets
-             videoElement.srcObject = stream;
-             videoElement.play().catch(e => console.error("Review: Video play() failed in stream effect:", e));
+    if (stream && videoElement) {
+         // ---> ADD THIS LOG <---
+         console.log(`>>> useEffect[stream, videoElement]: Attaching stream ${stream.id} to video element. Current srcObject:`, videoElement.srcObject);
+        if (videoElement.srcObject !== stream) {
+            videoElement.srcObject = stream;
+            videoElement.play().catch(e => console.error(">>> useEffect[stream, videoElement]: Video play() failed:", e));
         }
     } else if (!stream && videoElement && videoElement.srcObject) {
-         // Stream removed, clear source (though stopWebcam likely handles this)
-         console.log("Review: useEffect[stream] cleanup - Stream is null, clearing srcObject.");
-         videoElement.srcObject = null;
+        console.log(">>> useEffect[stream, videoElement]: Stream is null, clearing srcObject.");
+        videoElement.srcObject = null;
     }
-}, [stream, videoElement]); // Depend on both stream and the video element state
+     // ---> ADD THIS LOG to see state values when hook runs <---
+     console.log(`>>> useEffect[stream, videoElement] check: stream=${!!stream}, videoElement=${!!videoElement}`);
+
+}, [stream, videoElement]);
         
         
         
@@ -151,34 +160,66 @@ useEffect(() => {
     
 
         const videoRefCallback = useCallback((node) => {
-    // This callback runs when the ref is attached or detached
-    console.log(`Review: videoRefCallback called. Node: ${node ? 'Exists' : 'Null'}`);
-    if (node) {
-        // --- Element is MOUNTED ---
-        setVideoElement(node); // Store the node in state
-        // If stream already exists when element mounts, connect it
-        if (stream) {
-             console.log("Review: videoRefCallback - Node mounted, stream exists. Setting srcObject/playing.");
-             node.srcObject = stream;
-             node.play().catch(e => console.error("Review: Video play() failed in callback ref:", e));
-        } else {
-             console.log("Review: videoRefCallback - Node mounted, stream NOT ready yet.");
-        }
-        // Add persistent error listener
-         node.addEventListener('error', handleVideoError); // Use the existing handler if defined
-    } else {
-        // --- Element is UNMOUNTED ---
-        console.log("Review: videoRefCallback - Node unmounted.");
-         const currentVideoNode = videoElement; // Get node from state before clearing
-         if (currentVideoNode) {
-             currentVideoNode.removeEventListener('error', handleVideoError);
-             // Optionally clear srcObject here too, though stopWebcam should cover it
-             // currentVideoNode.srcObject = null;
-         }
-        setVideoElement(null); // Clear the state variable
-        setIsVideoReady(false); // Ensure not ready if element unmounts
-    }
-}, [stream]); // Dependency on stream ensures srcObject is set if stream arrives *after* mount
+            // Log entry point
+            console.log(`Review: videoRefCallback called. Node: ${node ? 'Exists' : 'Null'}`);
+        
+            if (node) { // Node is MOUNTED
+                // Log node received
+                console.log(">>> videoRefCallback: Node received, setting videoElement state.", node);
+                // Set videoElement state
+                setVideoElement(node);
+        
+                // --- Attach Event Listeners Directly to the Node ---
+                // Use function assignment for oncanplay, onerror, onstalled
+                // This ensures previous handlers are replaced if the callback runs again for the same node (unlikely but safe)
+                node.oncanplay = () => {
+                    console.log(">>> videoRefCallback: onCanPlay event fired on node <<<");
+                    setIsVideoReady(true);
+                };
+                node.onerror = (e) => {
+                    console.error("Video Error in Callback Ref:", e);
+                    setIsVideoReady(false); // Set not ready on error
+                };
+                node.onstalled = () => {
+                    console.warn("Video Stalled in Callback Ref");
+                    setIsVideoReady(false); // Set not ready if stalled
+                };
+                // Optional: If you still need handleVideoError for other purposes, keep addEventListener/removeEventListener pair
+                // node.addEventListener('error', handleVideoError);
+        
+        
+                // --- Attempt to attach stream IF stream is ready when node mounts ---
+                // The useEffect hook will handle cases where the stream arrives later
+                if (stream && node.srcObject !== stream) {
+                    console.log(">>> videoRefCallback: Attaching existing stream to newly mounted node.");
+                    node.srcObject = stream;
+                    node.play().catch(e => console.error("Video play() failed in callback ref:", e));
+                } else if (!stream) {
+                     console.log(">>> videoRefCallback: Node mounted, but stream is not ready yet.");
+                } else {
+                     console.log(">>> videoRefCallback: Node mounted, stream already attached.");
+                }
+        
+            } else { // Node is UNMOUNTED
+                // Log unmount
+                console.log("Review: videoRefCallback - Node unmounted.");
+                // Log clearing state
+                console.log(">>> videoRefCallback: Node is null (unmounting?), clearing videoElement state.");
+        
+                // --- Cleanup ---
+                // Get the node from state *before* clearing it, if needed for listener removal
+                // const currentVideoNode = videoElement;
+                // if (currentVideoNode) {
+                //     // Remove specific listeners if added with addEventListener
+                //     // currentVideoNode.removeEventListener('error', handleVideoError);
+                // }
+        
+                // Clear states
+                setVideoElement(null);
+                setIsVideoReady(false);
+            }
+        // Ensure stream is the only dependency needed here, as state setters don't need to be listed
+        }, [stream]);
         
         
 
@@ -299,43 +340,60 @@ useEffect(() => {
     }, [sessionLimit, setFeedback]); // Add sessionLimit dependency
 
     // Start the review session
-    const handleStartReview = async () => {
-        if (!selectedDeckId) {
-            setFeedback('Please select a deck first.');
-            return;
-        }
-    
-        if (gestureModelLoadState === GESTURE_MODEL_LOADED_STATE.LOADING) {
-            setFeedback('Models loading...');
-            return;
-        }
-    
-        if (gestureModelLoadState !== GESTURE_MODEL_LOADED_STATE.LOADED) {
-            setFeedback('Models failed to load.');
-            return;
-        }
-    
-        setReviewComplete(false);
-        setReviewActive(true); // ✅ this renders the video now
-        setFeedback('Starting webcam...');
-    
-        stopWebcam(); // Ensure clean start
-    
-        // Wait until video mounts, then set stream
-        setTimeout(async () => {
-            await startWebcam();
-        }, 500); // Slightly longer delay
-    };
+    // Replace the existing handleStartReview with this:
+const handleStartReview = async () => {
+    if (!selectedDeckId) {
+        setFeedback('Please select a deck first.');
+        return;
+    }
+    if (gestureModelLoadState === GESTURE_MODEL_LOADED_STATE.LOADING) {
+        setFeedback('Models loading...');
+        return;
+    }
+    if (gestureModelLoadState !== GESTURE_MODEL_LOADED_STATE.LOADED || !knn || knn.getNumClasses() === 0) {
+         // Also check if model is loaded and TRAINED, otherwise review makes no sense
+         setFeedback('Models not loaded or no gestures trained yet.');
+         console.warn("Review start blocked: Models not ready or not trained.");
+        return;
+    }
+
+    setReviewComplete(false);
+    setReviewActive(true); // Trigger re-render, which should mount the video element
+    setFeedback('Starting webcam...');
+    stopWebcam(); // Ensure clean start (stops previous stream & prediction loop)
+
+    // --- Start webcam immediately ---
+    const streamStarted = await startWebcam(); // Call startWebcam directly
+
+    if (!streamStarted) {
+        console.error("Review: Webcam failed to start in handleStartReview.");
+        // Optionally reset state if webcam fails critically
+        // setReviewActive(false);
+        // setFeedback is likely set within startWebcam on error
+    } else {
+        console.log("Review: Webcam started successfully in handleStartReview. Component should re-render with stream.");
+        // Fetch cards AFTER webcam is confirmed to start (or maybe even after video is ready?)
+        // Let's fetch cards here for now, assuming webcam start is the main prerequisite
+         await fetchCardsForDeck(selectedDeckId);
+    }
+};
     
 
     const runPrediction = useCallback(async () => {
         // Ensure everything needed is ready
-        if (!isVideoReady || !knn || !mobilenetModel 
-            || !videoElement || !stream 
-            || videoElement.readyState < 3 || videoElement.videoWidth === 0) {
-            return;
+        if (!videoElement 
+            || !isVideoReady 
+            || videoElement.readyState < HTMLMediaElement.HAVE_ENOUGH_DATA 
+            || !knn 
+            || !mobilenetModel 
+            || !stream) {
+                console.log(`Skipping prediction: videoElement=${!!videoElement},
+                     isVideoReady=${isVideoReady}, readyState=${videoElement?.readyState}, 
+                     knn=${!!knn}, mobilenet=${!!mobilenetModel}, stream=${!!stream}`);
+                return;
+            
         }
-
+        console.log(">>> Prediction check PASSED, proceeding...");
         let frameTensor = null; let logits = null; let keptLogits = null; let result = null;
 
         try {
@@ -364,26 +422,27 @@ frameTensor = tf.browser.fromPixels(videoElement);
         } finally {
             tf.dispose([frameTensor, logits, keptLogits]); // Dispose all created tensors
         }
-    }, [isVideoReady, knn, mobilenetModel, stream, videoElement]); // Dependencies
+    }, [videoElement, isVideoReady, knn, mobilenetModel, stream]);  // Dependencies
 
     // --- Effect to Start/Stop Prediction Loop ---
-    useEffect(() => {
-        // Start loop ONLY if review is active, not complete, stream exists, and models are loaded/trained
-        if (reviewActive && !reviewComplete && stream && knn && mobilenetModel && knn.getNumClasses() > 0) {
-            console.log("Review: Starting prediction loop.");
-            if (predictionIntervalRef.current) clearInterval(predictionIntervalRef.current);
-            predictionIntervalRef.current = setInterval(runPrediction, 200); // Adjust interval as needed
-        } else {
-            // Stop the loop otherwise
-            if (predictionIntervalRef.current) {
-                 console.log("Review: Stopping prediction loop.");
-                 clearInterval(predictionIntervalRef.current);
-                 predictionIntervalRef.current = null;
-            }
+    // Inside ReviewFlashcards.jsx
+
+useEffect(() => {
+    // VVV ADD isVideoReady to the conditions VVV
+    if (reviewActive && !reviewComplete && stream && knn && mobilenetModel && knn.getNumClasses() > 0 && isVideoReady) {
+        console.log(">>> Review: Starting prediction loop (Video Ready)."); // Modified log
+        if (predictionIntervalRef.current) clearInterval(predictionIntervalRef.current);
+        predictionIntervalRef.current = setInterval(runPrediction, 200);
+    } else {
+        if (predictionIntervalRef.current) {
+            console.log(">>> Review: Stopping prediction loop (Conditions not met)."); // Modified log
+            clearInterval(predictionIntervalRef.current);
+            predictionIntervalRef.current = null;
         }
-        // Cleanup interval on unmount or when dependencies change
-        return () => { if (predictionIntervalRef.current) { clearInterval(predictionIntervalRef.current); predictionIntervalRef.current = null; }};
-    }, [reviewActive, reviewComplete, stream, knn, mobilenetModel, runPrediction]);
+    }
+    return () => { if (predictionIntervalRef.current) { clearInterval(predictionIntervalRef.current); predictionIntervalRef.current = null; }};
+    // VVV ADD isVideoReady to dependencies VVV
+}, [reviewActive, reviewComplete, stream, knn, mobilenetModel, runPrediction, isVideoReady]);
     // Generate hint from answer text
     const generateHint = (answerText) => {
         // Simple hint generation - show first letter of each word and blanks for rest
@@ -601,6 +660,45 @@ frameTensor = tf.browser.fromPixels(videoElement);
         return () => document.removeEventListener('keydown', handleKeyDown);
     }, [reviewActive, showAnswer, currentCardIndex, deckCards, hintText, hintUsed]); // Updated dependencies
 
+    useEffect(() => {
+    if (!reviewActive || !knn || knn.getNumClasses() === 0) return;
+    const { label, confidence } = currentPrediction;
+
+    if (confidence >= GESTURE_CONFIDENCE_THRESHOLD) {
+        console.log(`Review: Detected gesture "${label}" with confidence ${confidence}. Acting...`);
+        setDetectedGesture(label); // <<< Set the detected gesture state
+        setTimeout(() => setDetectedGesture(null), 500);
+    
+            // Actions triggered based on label
+            switch (label) {
+                case 'yes':
+                    if (showAnswer) { // Only trigger response if answer is shown
+                        handleResponse('correct');
+                        setCurrentPrediction({ label: '...', confidence: 0 }); // Reset prediction after acting
+                    }
+                    break;
+                case 'no':
+                     if (showAnswer) { // Only trigger response if answer is shown
+                        handleResponse('incorrect');
+                         setCurrentPrediction({ label: '...', confidence: 0 }); // Reset prediction after acting
+                     }
+                    break;
+                case 'hint':
+                    if (!showAnswer) { // Only trigger hint if answer is NOT shown
+                        handleHint();
+                        setCurrentPrediction({ label: '...', confidence: 0 }); // Reset prediction after acting
+                    }
+                    break;
+                // Add cases for other gestures if trained (e.g., 'reveal'?)
+                default:
+                    // Optional: Log if a trained gesture isn't mapped
+                    // console.log(`Review: Unmapped gesture detected: ${label}`);
+                    break;
+            }
+        }
+        // Add dependencies: reviewActive, showAnswer, currentPrediction, handleResponse, handleHint, knn
+    }, [reviewActive, showAnswer, currentPrediction, handleResponse, handleHint, knn]);
+
 
     // --- Styles ---
     const containerStyle = { padding: '15px' };
@@ -741,33 +839,27 @@ frameTensor = tf.browser.fromPixels(videoElement);
                     <div style={{marginBottom: '15px'}}>
 
                     
-                    <>
                     <video
-    ref={videoRefCallback} // <<< CHANGE THIS LINE
+    ref={videoRefCallback} // <<< *** THIS IS THE MOST IMPORTANT PART ***
     autoPlay
-    playsInline // Keep this for Chrome/Edge compatibility if needed
+    playsInline
     muted
     style={reviewVideoStyle}
-    // Add width/height attributes if they helped previously
-    width="320"
+    width="320" // Keep dimensions
     height="240"
- ></video>
-
-  <canvas
-    id="debug-canvas"
-    width="320"
-    height="240"
-    style={{
-      display: 'block',
-      margin: '10px auto',
-      border: '1px solid #ccc'
-    }}
-  ></canvas>
-
-  <p style={{ textAlign: 'center', color: videoRef.current ? 'green' : 'red' }}>
-    videoRef.current is {videoRef.current ? '✅ mounted' : '❌ NOT mounted'}
-  </p>
-</>
+    // Event handlers like onError/onStalled are good,
+    // onCanPlay is handled inside videoRefCallback in the code we wrote
+                            // Add listener for stalls or errors after playback starts
+                            onStalled={() => {
+                                console.warn("Review: Video stalled.");
+                                setIsVideoReady(false); // Consider video not ready if stalled
+                            }}
+                            onError={(e) => {
+                                console.error("Review: Video playback error:", e);
+                                setIsVideoReady(false);
+                                setWebcamError("Video playback error.");
+                            }}
+                        ></video>
 
 
                          {webcamError && <p style={{color: 'red', textAlign: 'center', fontSize: '0.9em'}}>{webcamError}</p>}
@@ -826,7 +918,16 @@ frameTensor = tf.browser.fromPixels(videoElement);
                                 </>
                             ) : (
                                 <>
-                                    <button onClick={() => handleResponse('correct')} style={correctButtonStyle}>
+                                    <button
+                                        onClick={() => handleResponse('correct')}
+                                        style={{
+                                            ...correctButtonStyle,
+                                            // Add conditional styling for feedback
+                                            border: detectedGesture === 'yes' ? '3px solid yellow' : correctButtonStyle.border,
+                                            transform: detectedGesture === 'yes' ? 'scale(1.05)' : 'none',
+                                            transition: 'border 0.1s ease-out, transform 0.1s ease-out' // Smooth transition
+                                        }}
+                                    >
                                         Correct (1 / →)
                                     </button>
                                     <button onClick={() => handleResponse('hard')} style={hardButtonStyle}>
