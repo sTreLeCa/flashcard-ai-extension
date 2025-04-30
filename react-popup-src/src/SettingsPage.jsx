@@ -3,6 +3,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import * as tf from '@tensorflow/tfjs';
 import * as mobilenet from '@tensorflow-models/mobilenet';
 import * as knnClassifier from '@tensorflow-models/knn-classifier';
+import { openDB, saveGestureModel, loadGestureModel } from './db.js';
 
 const GESTURE_CLASSES = ['yes', 'no', 'hint']; // Add more later like 'reveal' if needed
 const REQUIRED_SAMPLES = 15; // Number of samples needed for training
@@ -21,41 +22,79 @@ function SettingsPage() {
     const trainingIntervalRef = useRef(null); // Ref to hold setInterval ID for capturing
 
     // --- Function to Load Models ---
-    const loadModels = useCallback(async () => {
-        setInfoText('Loading MobileNet...');
-        console.log("Loading MobileNet...");
+    const loadModel = useCallback(async (knnInstance) => {
+        if (!knnInstance) {
+             console.warn("loadModel called without KNN instance.");
+             return {}; // Return empty object if no instance
+        };
+        setInfoText("Checking for saved gestures...");
+        console.log("SettingsPage: Calling loadGestureModel util...");
         try {
-            // Ensure TFJS backend is ready (WebGL is preferred)
-            await tf.ready();
-            console.log("TFJS Backend:", tf.getBackend());
-            if (tf.getBackend() !== 'webgl') {
-                 console.warn("WebGL backend not available, using CPU. Performance may suffer.");
+            // Call the imported function from db.js
+            const loadedCounts = await loadGestureModel(knnInstance);
+            if (loadedCounts && Object.keys(loadedCounts).length > 0) {
+                console.log("SettingsPage: Loaded counts received:", loadedCounts);
+                setClassExampleCounts(loadedCounts); // <<< UPDATE STATE HERE
+                setInfoText("Saved gestures loaded. Ready to train more or review.");
+            } else {
+                console.log("SettingsPage: No saved gesture data found or loaded.");
+                setInfoText("No saved gestures found. Ready to train.");
+                setClassExampleCounts({}); // Ensure counts are reset if nothing loaded
             }
-
-            const mobilenetInstance = await mobilenet.load();
-            setMobilenetModel(mobilenetInstance);
-            console.log("MobileNet loaded.");
-
-            const knnInstance = knnClassifier.create();
-            setKnn(knnInstance);
-            console.log("KNN Classifier created.");
-
-            // TODO LATER: Load existing KNN data from IndexedDB if available
-            // setClassExampleCounts(loadedCounts); // Update counts from loaded data
-
-            setInfoText('Models loaded. Start webcam to train.');
-
-        } catch (error) {
-            console.error("Error loading models:", error);
-            setInfoText('Error loading models. Please refresh.');
-            setWebcamError('Model loading failed.'); // Use webcam error state for model errors too for now
+            return loadedCounts || {}; // Return counts
+        } catch (err) {
+            console.error("SettingsPage: Error loading model via db util:", err);
+            setInfoText(`Error loading gestures: ${err.message}`);
+            setClassExampleCounts({}); // Reset counts on error
+            return {}; // Return empty counts on error
         }
-    }, []); // useCallback because it doesn't depend on changing state/props
+    }, [setClassExampleCounts, setInfoText]) // useCallback because it doesn't depend on changing state/props
 
     // --- Load models on component mount ---
     useEffect(() => {
-        loadModels();
-    }, [loadModels]);
+        let isMounted = true;
+        console.log("SettingsPage: Mount effect - Loading models...");
+        setInfoText('Loading recognition models...');
+
+        const initializeModels = async () => {
+            let knnInstance = null;
+            try {
+                await tf.ready();
+                console.log("SettingsPage: TFJS Backend:", tf.getBackend());
+                const mobilenetInstance = await mobilenet.load();
+                 if (!isMounted) return; // Check after await
+                setMobilenetModel(mobilenetInstance);
+                console.log("SettingsPage: MobileNet loaded.");
+
+                knnInstance = knnClassifier.create();
+                 if (!isMounted) return;
+                setKnn(knnInstance);
+                console.log("SettingsPage: KNN Classifier created.");
+
+                // Now attempt to load saved data *after* KNN is created
+                 if (knnInstance && isMounted) {
+                    await loadModel(knnInstance); // Wait for loading attempt
+                 }
+
+            } catch (error) {
+                console.error("SettingsPage: Error loading models:", error);
+                 if (isMounted) {
+                    setInfoText('Error loading models. Please refresh.');
+                    setWebcamError('Model loading failed.');
+                 }
+            } finally {
+                 if (isMounted && !infoText.startsWith('Error')) { // Avoid overwriting error message
+                      // Info text should be set by loadModel now
+                     // setInfoText('Models ready. Start webcam to train.');
+                 }
+            }
+        };
+
+        initializeModels();
+
+         return () => { isMounted = false; console.log("SettingsPage: Unmounting.") }
+
+    }, [loadModel]);
 
     // --- Webcam Control Functions (Moved here) ---
     const startWebcam = async () => {
@@ -155,38 +194,25 @@ function SettingsPage() {
 
     // TODO LATER: Function to save KNN dataset to IndexedDB
     const saveModel = async () => {
-         if (!knn || Object.keys(classExampleCounts).length === 0) {
-              setInfoText("No training data to save.");
-              return;
-         }
-         setInfoText("Saving model data...");
-         // Get dataset from KNN
-         const dataset = knn.getClassifierDataset();
-         // Convert dataset tensors to plain objects/arrays for IndexedDB
-         const serializableDataset = {};
-         Object.entries(dataset).forEach(([classIndex, data]) => {
-             // data is a Tensor, convert its data to a regular array
-             let dataAsArray = Array.from(data.dataSync());
-             serializableDataset[classIndex] = { data: dataAsArray, shape: data.shape };
-             data.dispose(); // Dispose tensor after getting data
-         });
-         console.log("Serializable KNN dataset:", serializableDataset);
-
-         // --- Save to IndexedDB (Needs DB logic) ---
-         try {
-              const db = await openDB(); // Need openDB from App or Manage? Refactor needed!
-              const transaction = db.transaction('gestureModel', 'readwrite'); // Assumes 'gestureModel' store exists
-              const store = transaction.objectStore('gestureModel');
-              // Use a fixed key (e.g., 1) to always overwrite the saved model data
-               const putRequest = store.put({ id: 1, dataset: serializableDataset, classCounts: classExampleCounts });
-               putRequest.onsuccess = () => { setInfoText("Model saved successfully!"); console.log("Model saved to IndexedDB"); };
-               putRequest.onerror = (e) => { setInfoText(`Error saving model: ${e.target.error?.message}`); console.error("Error saving model:", e.target.error); };
-               transaction.onerror = (e) => { setInfoText(`Save Tx Error: ${e.target.error?.message}`); console.error("Save Tx Error:", e.target.error); };
-         } catch (err) {
-              setInfoText(`DB Error saving model: ${err.message}`); console.error("DB Error saving model", err);
-         }
-         // --- End Save Logic ---
-    };
+        if (!knn || knn.getNumClasses() === 0) {
+             setInfoText("No training data recorded yet to save.");
+             setTimeout(() => setInfoText(''), 2000);
+             return;
+        }
+        setInfoText("Saving model data...");
+        console.log("SettingsPage: Calling saveGestureModel util...");
+        try {
+             // VVV Call the imported function from db.js VVV
+             await saveGestureModel(knn, classExampleCounts);
+             setInfoText("Gestures saved successfully!");
+             setTimeout(() => setInfoText(''), 2000); // Clear feedback on success
+        } catch (err) {
+             // Handle errors thrown by the saveGestureModel utility
+             setInfoText(`Error saving model: ${err.message}`);
+             console.error("SettingsPage: Error saving model via db util:", err);
+             // Feedback will remain showing the error
+        }
+   };
 
 
     // Styles
