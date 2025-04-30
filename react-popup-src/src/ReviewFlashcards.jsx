@@ -61,8 +61,10 @@ const [videoElement, setVideoElement] = useState(null);
             let knnInstance = null; // Temporary instance
     
             try {
-                await tf.ready();
-                console.log("Review: TFJS Backend:", tf.getBackend());
+                console.log("Attempting to set TFJS backend to CPU...");
+        await tf.setBackend('cpu');
+        await tf.ready(); // Wait for backend to be ready
+        console.log(">>> Review: TFJS Backend explicitly set to:", tf.getBackend());
                 const mobilenetLoadPromise = mobilenet.load(); // Start loading mobilenet
                 knnInstance = knnClassifier.create(); // Create KNN instance
                 setKnn(knnInstance); // Set state early
@@ -379,70 +381,113 @@ const handleStartReview = async () => {
 };
     
 
-    const runPrediction = useCallback(async () => {
-        // Ensure everything needed is ready
-        if (!videoElement 
-            || !isVideoReady 
-            || videoElement.readyState < HTMLMediaElement.HAVE_ENOUGH_DATA 
-            || !knn 
-            || !mobilenetModel 
-            || !stream) {
-                console.log(`Skipping prediction: videoElement=${!!videoElement},
-                     isVideoReady=${isVideoReady}, readyState=${videoElement?.readyState}, 
-                     knn=${!!knn}, mobilenet=${!!mobilenetModel}, stream=${!!stream}`);
-                return;
-            
+    // Inside ReviewFlashcards.jsx component
+
+// Inside ReviewFlashcards.jsx component
+
+// Inside ReviewFlashcards.jsx component
+
+const runPrediction = useCallback(async () => {
+    // Guard clause: Ensure all necessary components are ready before proceeding.
+    if (!videoElement || !isVideoReady || videoElement.readyState < HTMLMediaElement.HAVE_ENOUGH_DATA || !knn || !mobilenetModel || !stream) {
+         // Log if prerequisites are not met when the button is clicked (or if called otherwise)
+         console.log(`Skipping single prediction: Prerequisites not met. videoElement=${!!videoElement}, isVideoReady=${isVideoReady}, readyState=${videoElement?.readyState}, knn=${!!knn}, mobilenet=${!!mobilenetModel}, stream=${!!stream}`);
+        return; // Exit if not ready
+    }
+
+    // Log that the manual trigger (or any call) has initiated the function
+    console.log(">>> Manual Prediction Triggered (or function called) <<<");
+
+    // Initialize tensor variables to null
+    let frameTensor = null;
+    let logits = null;
+    let result = null;
+
+    try {
+        // ---> VVV CREATE DUMMY TENSOR VVV <---
+        // Create a tensor of zeros with the expected shape [1, 1024]
+        // This bypasses MobileNet entirely for this test.
+        dummyTensor = tf.zeros([1, 1024]);
+        console.log(`>>> Created dummyTensor: isDisposed = ${dummyTensor.isDisposed}`);
+
+        if (!dummyTensor || dummyTensor.isDisposed) {
+             console.error("Prediction Error: Dummy tensor is invalid.");
+             if(dummyTensor && !dummyTensor.isDisposed) tf.dispose(dummyTensor);
+             return;
         }
-        console.log(">>> Prediction check PASSED, proceeding...");
-        let frameTensor = null; let logits = null; let keptLogits = null; let result = null;
 
-        try {
-            // DEBUG: draw video to canvas
-const debugCanvas = document.getElementById('debug-canvas');
-if (debugCanvas) {
-    const ctx = debugCanvas.getContext('2d');
-    ctx.drawImage(videoRef.current, 0, 0, debugCanvas.width, debugCanvas.height);
-}
+        console.log(`>>> Before knn.predictClass (dummy): dummyTensor.isDisposed = ${dummyTensor.isDisposed}`);
+        // Predict using the dummy tensor
+        result = await knn.predictClass(dummyTensor, 3);
+        console.log(">>> After knn.predictClass returned (dummy).");
 
-// Use the canvas as the source for fromPixels
-frameTensor = tf.browser.fromPixels(videoElement);
-
-            logits = mobilenetModel.infer(frameTensor, true);
-            keptLogits = tf.keep(logits); // Keep the tensor
-
-            result = await knn.predictClass(keptLogits, 3); // Predict with kept tensor
-
-            if (result?.label && result.confidences) {
-                 setCurrentPrediction({ label: result.label, confidence: result.confidences[result.label] || 0 });
-                 // TODO LATER: Trigger Action Logic
-            } else { setCurrentPrediction({ label: '...', confidence: 0 }); }
-
-        } catch (error) {
-            console.error("Prediction error:", error); setCurrentPrediction({ label: 'Error', confidence: 0 });
-        } finally {
-            tf.dispose([frameTensor, logits, keptLogits]); // Dispose all created tensors
+        if (result?.label && result.confidences) {
+             const confidenceScore = result.confidences[result.label] || 0;
+             console.log(`>>> Prediction Result (dummy): Label = ${result.label}, Confidence = ${confidenceScore.toFixed(3)}`);
+             // Update state to show dummy result - label might be random but it shouldn't error
+             setCurrentPrediction({ label: `Dummy OK: ${result.label}`, confidence: confidenceScore });
+        } else {
+             console.log(">>> Prediction Result (dummy): Invalid or null.");
+             setCurrentPrediction({ label: 'Dummy Invalid', confidence: 0 });
         }
-    }, [videoElement, isVideoReady, knn, mobilenetModel, stream]);  // Dependencies
+
+    } catch (error) {
+        // Log error specifically for the dummy test
+        console.error("Prediction error occurred during DUMMY tensor prediction:", error);
+        setCurrentPrediction({ label: 'Dummy Error', confidence: 0 });
+    } finally {
+        // Dispose the dummy tensor
+        if (dummyTensor && !dummyTensor.isDisposed) {
+            tf.dispose(dummyTensor);
+        }
+        console.log(">>> Single prediction function finished (DUMMY TENSOR TEST).");
+    }
+}, [videoElement, isVideoReady, knn, mobilenetModel, stream, setCurrentPrediction]); // Keep dependencies
+
 
     // --- Effect to Start/Stop Prediction Loop ---
     // Inside ReviewFlashcards.jsx
 
-useEffect(() => {
-    // VVV ADD isVideoReady to the conditions VVV
-    if (reviewActive && !reviewComplete && stream && knn && mobilenetModel && knn.getNumClasses() > 0 && isVideoReady) {
-        console.log(">>> Review: Starting prediction loop (Video Ready)."); // Modified log
-        if (predictionIntervalRef.current) clearInterval(predictionIntervalRef.current);
-        predictionIntervalRef.current = setInterval(runPrediction, 200);
-    } else {
-        if (predictionIntervalRef.current) {
-            console.log(">>> Review: Stopping prediction loop (Conditions not met)."); // Modified log
-            clearInterval(predictionIntervalRef.current);
-            predictionIntervalRef.current = null;
+    // Inside ReviewFlashcards.jsx component
+
+    // --- Effect to Start/Stop Prediction Loop ---
+    useEffect(() => {
+        // --- VVV Prediction Interval Logic is Now Disabled VVV ---
+
+        // The automatic starting of the prediction interval is commented out
+        // We will trigger predictions manually using a button for debugging.
+
+        /*
+        // Original logic (now disabled):
+        if (reviewActive && !reviewComplete && stream && knn && mobilenetModel && knn.getNumClasses() > 0 && isVideoReady) {
+            console.log(">>> Review: Starting prediction loop (Video Ready).");
+            if (predictionIntervalRef.current) clearInterval(predictionIntervalRef.current);
+            predictionIntervalRef.current = setInterval(runPrediction, 200); // Adjust interval as needed
+        } else {
+            // Stop the loop otherwise
+            if (predictionIntervalRef.current) {
+                 console.log(">>> Review: Stopping prediction loop (Conditions not met).");
+                 clearInterval(predictionIntervalRef.current);
+                 predictionIntervalRef.current = null;
+            }
         }
-    }
-    return () => { if (predictionIntervalRef.current) { clearInterval(predictionIntervalRef.current); predictionIntervalRef.current = null; }};
-    // VVV ADD isVideoReady to dependencies VVV
-}, [reviewActive, reviewComplete, stream, knn, mobilenetModel, runPrediction, isVideoReady]);
+        */
+
+        // --- VVV Keep the cleanup function VVV ---
+        // This ensures that if an interval was somehow started, it gets cleared when
+        // the component unmounts or dependencies change.
+        return () => {
+            if (predictionIntervalRef.current) {
+                 console.log(">>> Cleanup: Clearing prediction interval on unmount/dependency change.");
+                 clearInterval(predictionIntervalRef.current);
+                 predictionIntervalRef.current = null;
+            }
+        };
+
+    // Dependencies array is minimal now since the interval logic is disabled.
+    // You might list dependencies relevant ONLY to the cleanup if necessary,
+    // but an empty array is often sufficient if the interval is never started.
+    }, []); // Or adjust dependencies if needed for other logic in this hook (if any)
     // Generate hint from answer text
     const generateHint = (answerText) => {
         // Simple hint generation - show first letter of each word and blanks for rest
@@ -860,6 +905,13 @@ useEffect(() => {
                                 setWebcamError("Video playback error.");
                             }}
                         ></video>
+                        <button
+                            onClick={runPrediction} // Call runPrediction when clicked
+                            disabled={!isVideoReady || !knn || !mobilenetModel} // Disable if prerequisites aren't met
+                            style={{display: 'block', margin: '10px auto', padding: '8px 12px'}}
+                        >
+                            Run Single Prediction
+                        </button>
 
 
                          {webcamError && <p style={{color: 'red', textAlign: 'center', fontSize: '0.9em'}}>{webcamError}</p>}
