@@ -529,130 +529,131 @@ useEffect(() => {
 
     // Handle user response to a card (Correct, Hard, Incorrect)
     const handleResponse = async (rating) => { // rating: 'correct', 'hard', 'incorrect'
-        if (!reviewActive || currentCardIndex >= deckCards.length) return;
-
-        const effectiveRating = hintUsed ? 'hard' : rating; // If hint was used, treat response as "hard" (less severe than incorrect)
-
-        // Show visual feedback animation based on the *button pressed*, not effective rating
-        setFeedbackAnimation(rating);
-        setTimeout(async () => {
-            const webcamStream = await startWebcam();
-            
-            if (webcamStream) {
-                console.log("Review: Webcam started successfully, loading cards...");
-                setFeedback('Loading cards...');
-                fetchCardsForDeck(selectedDeckId);
-            } else {
-                console.error("Review: Webcam failed to start:", webcamError);
-                setFeedback(`Webcam error: ${webcamError || 'Could not start webcam.'}`);
-            }
-        }, 400); // was 100ms
-         // Clear animation
-
+        if (!reviewActive || currentCardIndex >= deckCards.length) {
+             console.warn("handleResponse called when review not active or finished.");
+             return; // Exit if review isn't active or no card is present
+        }
+    
+        const effectiveRating = hintUsed ? 'hard' : rating; // If hint was used, treat as "hard"
+    
+        // --- Visual Feedback ---
+        setFeedbackAnimation(rating); // Show visual feedback based on actual button/gesture intent
+        // **NO setTimeout or startWebcam here!**
+    
         const currentCard = deckCards[currentCardIndex];
-
-        // Update statistics based on actual rating (not effective rating)
+    
+        // --- Update Statistics ---
         setStats(prev => ({
             ...prev,
             correct: prev.correct + (rating === 'correct' ? 1 : 0),
             hard: prev.hard + (rating === 'hard' ? 1 : 0),
             incorrect: prev.incorrect + (rating === 'incorrect' ? 1 : 0)
         }));
-
+    
+        // --- Update Card in IndexedDB ---
         try {
             const db = await openDB();
             const transaction = db.transaction(STORE_NAME, 'readwrite');
             const store = transaction.objectStore(STORE_NAME);
             const getRequest = store.get(currentCard.id);
-
-            getRequest.onsuccess = (event) => {
-                const card = event.target.result;
-                if (!card) {
-                    setFeedback('Error: Card not found in database during update.');
-                    console.error("Card not found for update:", currentCard.id);
-                    moveToNextCard(); // Try to proceed gracefully
-                    return;
-                }
-
-                // Determine the current bucket, defaulting to 0 if undefined/invalid
-                let oldBucket = (card.bucket !== undefined && card.bucket >= MIN_BUCKET && card.bucket <= MAX_BUCKET) ? Number(card.bucket) : 0;
-                let newBucket;
-
-                // --- SRS Logic based on effective rating ---
-                switch (effectiveRating) {
-                    case 'correct':
-                        newBucket = Math.min(MAX_BUCKET, oldBucket + 1);
-                        break;
-                    case 'hard':
-                        // Move down one bucket, but stay at least at MIN_BUCKET
-                        newBucket = Math.max(MIN_BUCKET, oldBucket - 1);
-                        break;
-                    case 'incorrect':
-                    default:
-                        // Reset to bucket 0 on incorrect
-                        newBucket = 0;
-                        break;
-                }
-                // --- End SRS Logic ---
-
-                const updatedCard = {
-                    ...card,
-                    bucket: newBucket,
-                    lastReviewed: new Date().toISOString() // Update last reviewed time
+    
+            // Use a Promise to handle the async nature of DB operations within handleResponse
+            await new Promise((resolve, reject) => {
+                getRequest.onsuccess = (event) => {
+                    const card = event.target.result;
+                    if (!card) {
+                        console.error("Card not found for update:", currentCard.id);
+                        setFeedback('Error: Card not found in DB during update.');
+                        reject(new Error('Card not found')); // Reject the promise
+                        return;
+                    }
+    
+                    let oldBucket = (card.bucket !== undefined && card.bucket >= MIN_BUCKET && card.bucket <= MAX_BUCKET) ? Number(card.bucket) : 0;
+                    let newBucket;
+    
+                    switch (effectiveRating) {
+                        case 'correct': newBucket = Math.min(MAX_BUCKET, oldBucket + 1); break;
+                        case 'hard': newBucket = Math.max(MIN_BUCKET, oldBucket - 1); break;
+                        case 'incorrect': default: newBucket = 0; break;
+                    }
+    
+                    const updatedCard = { ...card, bucket: newBucket, lastReviewed: new Date().toISOString() };
+                    const putRequest = store.put(updatedCard);
+    
+                    putRequest.onsuccess = () => {
+                        console.log(`Card ${currentCard.id} updated. Old Bucket: ${oldBucket}, New Bucket: ${newBucket}, Rating: ${rating} (Effective: ${effectiveRating})`);
+                        resolve(); // Resolve the promise on successful update
+                    };
+                    putRequest.onerror = (e) => {
+                        console.error("Error putting updated card:", e.target.error);
+                        setFeedback(`Error updating card: ${e.target.error?.message}`);
+                        reject(e.target.error); // Reject on put error
+                    };
                 };
-
-                const putRequest = store.put(updatedCard);
-
-                putRequest.onsuccess = () => {
-                    console.log(`Card ${currentCard.id} updated. Old Bucket: ${oldBucket}, New Bucket: ${newBucket}, Rating: ${rating} (Effective: ${effectiveRating})`);
-                    moveToNextCard(); // Proceed after successful update
+    
+                getRequest.onerror = (e) => {
+                    console.error("Error getting card for update:", e.target.error);
+                    setFeedback(`Error retrieving card for update: ${e.target.error?.message}`);
+                    reject(e.target.error); // Reject on get error
                 };
-
-                putRequest.onerror = (e) => {
-                    setFeedback(`Error updating card: ${e.target.error?.message}`);
-                    console.error("Error putting updated card:", e.target.error);
-                    moveToNextCard(); // Try to proceed even if update fails
-                };
-            };
-
-            getRequest.onerror = (e) => {
-                setFeedback(`Error retrieving card for update: ${e.target.error?.message}`);
-                console.error("Error getting card for update:", e.target.error);
-                moveToNextCard(); // Try to proceed
-            };
-
-             transaction.onerror = (e) => {
-                 // Don't overwrite specific error messages if already set
-                 if (!feedback.includes('Error updating card') && !feedback.includes('Error retrieving card')) {
-                     setFeedback(`Transaction error during card update: ${e.target.error?.message}`);
-                 }
-                 console.error("Transaction error during card update:", e.target.error);
-             };
-             transaction.oncomplete = () => {
-                 console.log("Card update transaction complete.");
-             };
-
+    
+                 transaction.onerror = (e) => {
+                     if (!feedback.includes('Error updating card') && !feedback.includes('Error retrieving card')) {
+                         setFeedback(`Transaction error during card update: ${e.target.error?.message}`);
+                     }
+                     console.error("Transaction error during card update:", e.target.error);
+                     // Don't reject here necessarily, let request errors handle rejection
+                 };
+                 transaction.oncomplete = () => {
+                     console.log("Card update transaction complete.");
+                     // Resolve might have already happened via putRequest.onsuccess
+                 };
+            });
+    
+            // --- Move to Next Card (Only after DB attempt completes successfully) ---
+             moveToNextCard();
+    
         } catch (err) {
-            setFeedback(`Database error during card update: ${err.message}`);
-            console.error("Database error during update:", err);
-            moveToNextCard(); // Try to proceed
+            console.error("Error during handleResponse DB operations:", err);
+            // Still try to move to the next card even if DB update failed,
+            // otherwise the user gets stuck. The error feedback is already set.
+            moveToNextCard();
+        } finally {
+             // Clear animation after a short delay (e.g., 400ms) AFTER moving to next card
+             // Use a separate timeout state if needed, or just clear it in moveToNextCard
+             // For simplicity, let's rely on moveToNextCard clearing it for now.
+             // setTimeout(() => setFeedbackAnimation(null), 400); // Re-evaluate if needed
         }
     };
 
     // Move to the next card or end review
     const moveToNextCard = () => {
-        const nextIndex = currentCardIndex + 1;
+        const nextIndex = currentCardIndex + 1; // Calculate index of the next card
+
+        // Check if the next index is beyond the available cards in the current deck/session
         if (nextIndex >= deckCards.length) {
-            setReviewComplete(true);
-            setReviewActive(false);
-            setFeedback('Review session completed!');
+            // --- End of Review Session ---
+            console.log("Review complete. No more cards in this session.");
+            setReviewComplete(true); // Mark the review as complete
+            setReviewActive(false);  // Mark the review session as inactive
+                                     // (This will trigger useEffect to stop webcam/prediction loop)
+            setFeedback('Review session completed!'); // Provide user feedback
         } else {
-            setCurrentCardIndex(nextIndex);
-            setShowAnswer(false);
-            setHintUsed(false); // Reset hint status for the new card
-            setHintText(''); // Clear hint text for the new card
-            setFeedbackAnimation(null); // Ensure animation is cleared
+            // --- Move to the Next Card ---
+            console.log(`Moving from card index ${currentCardIndex} to ${nextIndex}`);
+            setCurrentCardIndex(nextIndex); // Update the index state to show the next card
+
+            // Reset states specific to the card being displayed:
+            setShowAnswer(false);      // Hide the answer for the new card
+            setHintUsed(false);        // Reset hint usage status for the new card
+            setHintText('');           // Clear any hint text shown for the previous card
+            // (Feedback is usually set by handleResponse/handleHint)
         }
+
+        // --- Reset Visual Feedback ---
+        // Clear any visual feedback animation (like background color flash)
+        // regardless of whether moving to next card or completing the review.
+        setFeedbackAnimation(null);
     };
 
     // Reset the review state
@@ -713,44 +714,104 @@ useEffect(() => {
         return () => document.removeEventListener('keydown', handleKeyDown);
     }, [reviewActive, showAnswer, currentCardIndex, deckCards, hintText, hintUsed]); // Updated dependencies
 
-    useEffect(() => {
-    if (!reviewActive || !knn || knn.getNumClasses() === 0) return;
-    const { label, confidence } = currentPrediction;
+        // Inside ReviewFlashcards.jsx component
 
-    if (confidence >= GESTURE_CONFIDENCE_THRESHOLD) {
-        console.log(`Review: Detected gesture "${label}" with confidence ${confidence}. Acting...`);
-        setDetectedGesture(label); // <<< Set the detected gesture state
-        setTimeout(() => setDetectedGesture(null), 500);
-    
-            // Actions triggered based on label
+    // Effect Hook: Acts on recognized gestures stored in currentPrediction state
+    useEffect(() => {
+        // Define the confidence threshold required to act on a prediction
+        const GESTURE_CONFIDENCE_THRESHOLD = 0.85; // Adjust this value as needed (0.0 to 1.0)
+
+        // Guard clauses: Only proceed if...
+        // 1. The review session is currently active.
+        // 2. The KNN model instance exists.
+        // 3. The KNN model has been trained with at least one class.
+        if (!reviewActive || !knn || knn.getNumClasses() === 0) {
+            return; // Exit if conditions aren't met
+        }
+
+        // Destructure the label and confidence from the current prediction state
+        const { label, confidence } = currentPrediction;
+
+        // Check if the prediction confidence meets or exceeds the threshold
+        if (confidence >= GESTURE_CONFIDENCE_THRESHOLD) {
+
+            // Log the detected gesture and confidence level
+            console.log(`Review: Detected gesture "${label}" with high confidence (${confidence.toFixed(2)}). Acting...`);
+
+            // Trigger visual feedback (e.g., button highlight)
+            setDetectedGesture(label);
+            // Set a timer to clear the visual feedback after a short duration (e.g., 500ms)
+            const feedbackTimer = setTimeout(() => setDetectedGesture(null), 500);
+
+            let actionTaken = false; // Flag to track if an action was triggered by this detection
+
+            // Determine which action to take based on the predicted label
             switch (label) {
                 case 'yes':
-                    if (showAnswer) { // Only trigger response if answer is shown
+                    // Trigger 'correct' response ONLY if the answer is currently shown
+                    if (showAnswer) {
+                        console.log(`   Action: Triggering handleResponse('correct')`);
                         handleResponse('correct');
-                        setCurrentPrediction({ label: '...', confidence: 0 }); // Reset prediction after acting
+                        actionTaken = true; // Mark that an action was taken
+                    } else {
+                         console.log(`   Action: 'yes' detected, but answer not shown. No action.`);
                     }
                     break;
+
                 case 'no':
-                     if (showAnswer) { // Only trigger response if answer is shown
+                    // Trigger 'incorrect' response ONLY if the answer is currently shown
+                    if (showAnswer) {
+                         console.log(`   Action: Triggering handleResponse('incorrect')`);
                         handleResponse('incorrect');
-                         setCurrentPrediction({ label: '...', confidence: 0 }); // Reset prediction after acting
-                     }
-                    break;
-                case 'hint':
-                    if (!showAnswer) { // Only trigger hint if answer is NOT shown
-                        handleHint();
-                        setCurrentPrediction({ label: '...', confidence: 0 }); // Reset prediction after acting
+                        actionTaken = true; // Mark that an action was taken
+                    } else {
+                         console.log(`   Action: 'no' detected, but answer not shown. No action.`);
                     }
                     break;
-                // Add cases for other gestures if trained (e.g., 'reveal'?)
-                default:
-                    // Optional: Log if a trained gesture isn't mapped
-                    // console.log(`Review: Unmapped gesture detected: ${label}`);
+
+                case 'hint':
+                    // Trigger hint action ONLY if the answer is NOT currently shown
+                    if (!showAnswer) {
+                         console.log(`   Action: Triggering handleHint()`);
+                        handleHint(); // Assuming handleHint doesn't cause immediate loops
+                        actionTaken = true; // Mark that an action was taken
+                    } else {
+                         console.log(`   Action: 'hint' detected, but answer already shown. No action.`);
+                    }
                     break;
+
+                // Add cases for other potential gestures ('reveal', 'hard', etc.) if trained
+                default:
+                     console.log(`   Action: Gesture "${label}" detected, but no action mapped.`);
+                    break; // No action for unmapped but recognized gestures
             }
+
+            // --- CRITICAL STEP TO PREVENT RAPID RE-TRIGGERING ---
+            // If an action was taken based on this prediction, reset the
+            // currentPrediction state immediately. This prevents the same prediction
+            // object from triggering the action again on the next component render
+            // before a new prediction comes in.
+            if (actionTaken) {
+                 console.log(`   Resetting currentPrediction state after acting on "${label}".`);
+                 setCurrentPrediction({ label: '...', confidence: 0 });
+            }
+
+             // Cleanup timer for visual feedback when effect re-runs or component unmounts
+             return () => clearTimeout(feedbackTimer);
         }
-        // Add dependencies: reviewActive, showAnswer, currentPrediction, handleResponse, handleHint, knn
-    }, [reviewActive, showAnswer, currentPrediction, handleResponse, handleHint, knn]);
+
+    // Dependencies for this useEffect hook:
+    // It needs to re-run whenever these values change.
+    }, [
+        reviewActive,           // Is the review session active?
+        showAnswer,             // Is the answer currently visible?
+        currentPrediction,      // The prediction state itself (label and confidence)
+        handleResponse,         // The function to call for correct/incorrect
+        handleHint,             // The function to call for hints
+        knn,                    // The KNN model instance (to check if ready)
+        setDetectedGesture,     // State setter for visual feedback
+        setCurrentPrediction    // State setter to reset prediction after action
+    ]); // Make sure all used variables/functions from component scope are listed
 
 
     // --- Styles ---
