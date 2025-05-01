@@ -12,70 +12,128 @@ import { openDB, loadGestureModel, STORE_NAME, GESTURE_MODEL_STORE_NAME, UNASSIG
 const GESTURE_MODEL_LOADED_STATE = { IDLE: 'idle', LOADING: 'loading', LOADED: 'loaded', FAILED: 'failed' };
 const GESTURE_CONFIDENCE_THRESHOLD = 0.85; // Confidence needed to trigger action
 
+// react-popup-src/src/ReviewFlashcards.jsx
+
+// ... other imports, constants, and component setup ...
+
 function ReviewFlashcards({ decks, setFeedback }) {
 
-    // --- State Variables ---
-    const [selectedDeckId, setSelectedDeckId] = useState('');
-    const [deckCards, setDeckCards] = useState([]);
-    const [isLoadingCards, setIsLoadingCards] = useState(false);
-    const [currentCardIndex, setCurrentCardIndex] = useState(0);
-    const [showAnswer, setShowAnswer] = useState(false);
-    const [reviewActive, setReviewActive] = useState(false);
-    const [reviewComplete, setReviewComplete] = useState(false);
-    const [stats, setStats] = useState({ correct: 0, incorrect: 0, hard: 0, total: 0 });
-    const [sessionLimit, setSessionLimit] = useState(20); // Default session limit
-    const [feedbackAnimation, setFeedbackAnimation] = useState(null); // For visual feedback on response
-    const [hintUsed, setHintUsed] = useState(false);
-    const [hintText, setHintText] = useState('');
-    const [showImageHint, setShowImageHint] = useState(false); // <<< State for image hint
-    const [isVideoReady, setIsVideoReady] = useState(false);
-    const [videoElement, setVideoElement] = useState(null);
-    const videoRef = useRef(null);
-    const [stream, setStream] = useState(null);
-    // videoReady state might be redundant if using isVideoReady
-    // const [videoReady, setVideoReady] = useState(false);
-    const [webcamError, setWebcamError] = useState('');
-    const [knn, setKnn] = useState(null);
-    const [mobilenetModel, setMobilenetModel] = useState(null);
-    const [gestureModelLoadState, setGestureModelLoadState] = useState(GESTURE_MODEL_LOADED_STATE.IDLE);
-    const [loadedClassCounts, setLoadedClassCounts] = useState({});
-    const predictionIntervalRef = useRef(null);
-    const [currentPrediction, setCurrentPrediction] = useState({ label: '...', confidence: 0 });
-    const [detectedGesture, setDetectedGesture] = useState(null); // For visual feedback on gesture detection
-    const GESTURE_MODEL_LOADED_STATE = { IDLE: 'idle', LOADING: 'loading', LOADED: 'loaded', FAILED: 'failed' };
-    const GESTURE_CONFIDENCE_THRESHOLD = 0.85; // Confidence needed to trigger action
+    // ... state variables ...
 
-    // --- End State Variables ---
-
-
-    // --- Load Models (MobileNet & KNN Data) ---
-    const loadModelsAndData = useCallback(async () => {
-        if (gestureModelLoadState !== GESTURE_MODEL_LOADED_STATE.IDLE) return;
-        setGestureModelLoadState(GESTURE_MODEL_LOADED_STATE.LOADING);
-        console.log("Review: Loading models...");
-        setFeedback("Loading recognition models...");
-        let knnInstance = null;
+    // --- Fetch cards for the selected deck (USING nextReviewDate) ---
+    const fetchCardsForDeck = useCallback(async (deckId) => {
+        setIsLoadingCards(true);
+        setFeedback('Loading cards...');
         try {
-            const mobilenetLoadPromise = mobilenet.load();
-            knnInstance = knnClassifier.create();
-            setKnn(knnInstance);
-            console.log("Review: KNN Classifier created.");
-            const loadedCounts = await loadGestureModel(knnInstance); // Use imported function
-            setLoadedClassCounts(loadedCounts || {});
-            console.log("Review: KNN Classifier data loaded. Counts:", loadedCounts);
-            const mobilenetInstance = await mobilenetLoadPromise;
-            setMobilenetModel(mobilenetInstance);
-            console.log("Review: MobileNet loaded.");
-            setGestureModelLoadState(GESTURE_MODEL_LOADED_STATE.LOADED);
-            setFeedback("Recognition models ready.");
-            setTimeout(() => setFeedback(''), 1500);
-        } catch (error) {
-            console.error("Review: Error loading models/data:", error);
-            setFeedback(`Error loading models: ${error.message}`);
-            setGestureModelLoadState(GESTURE_MODEL_LOADED_STATE.FAILED);
-            setMobilenetModel(null); setKnn(null);
+            const db = await openDB();
+            const transaction = db.transaction(STORE_NAME, 'readonly');
+            const store = transaction.objectStore(STORE_NAME);
+            const index = store.index('deckIdIndex'); // Ensure this index exists
+            // Use UNASSIGNED_DECK_ID (null) if deckId is empty/invalid
+            const targetDeckId = deckId ? parseInt(deckId, 10) : UNASSIGNED_DECK_ID;
+            const request = index.getAll(targetDeckId); // Fetch cards only for the target deck
+
+            request.onsuccess = () => {
+                const allCardsInDeck = request.result || [];
+                const now = new Date();
+                // Get today's date at midnight (local time) for accurate comparison
+                const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+                console.log(`Found ${allCardsInDeck.length} total cards in deck ID: ${targetDeckId}. Filtering for review based on nextReviewDate...`);
+
+                // --- VVV THIS IS THE CORRECT FILTER LOGIC VVV ---
+                const cardsForReview = allCardsInDeck.filter(card => {
+                    // Always review cards that haven't been scheduled yet (e.g., new cards or migration issues)
+                    if (!card.nextReviewDate) {
+                        console.log(` -> Including Card ID ${card.id}: No nextReviewDate found.`);
+                        return true;
+                    }
+
+                    try {
+                        // Parse the stored nextReviewDate
+                        const nextReview = new Date(card.nextReviewDate);
+                        // Handle invalid dates stored in the DB
+                        if (isNaN(nextReview.getTime())) {
+                             console.log(` -> Including Card ID ${card.id}: Invalid nextReviewDate format (${card.nextReviewDate}).`);
+                             return true;
+                        }
+
+                        // Normalize the review date to midnight (local time) for comparison
+                        const nextReviewDay = new Date(nextReview.getFullYear(), nextReview.getMonth(), nextReview.getDate());
+
+                        // Check if the card's next review day is today or in the past
+                        const isDue = nextReviewDay <= today;
+
+                        // Optional: More detailed debugging log
+                        // console.log(` -> Card ID ${card.id}: Next Review Date (Raw): ${card.nextReviewDate}, Next Review Day (Normalized): ${nextReviewDay.toISOString()}, Today (Normalized): ${today.toISOString()}, isDue: ${isDue}`);
+
+                        return isDue;
+
+                    } catch (e) {
+                        // Catch any other errors during date processing
+                        console.error(`Error processing date for card ID ${card.id}:`, e);
+                        console.log(` -> Including Card ID ${card.id} due to date processing error.`);
+                        return true; // Include card if processing fails, to be safe
+                    }
+                });
+                // --- ^^^ END OF CORRECT FILTER LOGIC ^^^ ---
+
+                console.log(`Found ${cardsForReview.length} cards due for review after filtering.`);
+
+                // Shuffle the cards ready for review
+                const shuffledCards = [...cardsForReview].sort(() => Math.random() - 0.5);
+
+                // Apply session limit
+                let cardsForSession = shuffledCards;
+                const limit = parseInt(sessionLimit, 10);
+                if (limit > 0 && shuffledCards.length > limit) {
+                    cardsForSession = shuffledCards.slice(0, limit);
+                    setFeedback(`Showing ${limit} of ${shuffledCards.length} cards due for review.`);
+                } else if (shuffledCards.length > 0) {
+                     setFeedback(`Found ${shuffledCards.length} cards due for review.`);
+                } else {
+                     setFeedback('No cards currently due for review in this deck.');
+                }
+
+                // Update state
+                setDeckCards(cardsForSession);
+                setStats({ correct: 0, incorrect: 0, hard: 0, total: cardsForSession.length });
+                setCurrentCardIndex(0);
+                setShowAnswer(false);
+                setHintUsed(false);
+                setHintText('');
+                setShowImageHint(false); // Also reset image hint here
+                setReviewActive(cardsForSession.length > 0);
+                setReviewComplete(cardsForSession.length === 0);
+            };
+
+            // DB Request/Transaction Handlers
+            request.onerror = (e) => {
+                setFeedback(`Error fetching cards: ${e.target.error?.message}`);
+                console.error("Error fetching cards:", e.target.error);
+                setIsLoadingCards(false);
+            };
+            transaction.oncomplete = () => {
+                console.log("Fetch cards transaction complete.");
+                setIsLoadingCards(false);
+            };
+            transaction.onerror = (e) => {
+                setFeedback(`Transaction error fetching cards: ${e.target.error?.message}`);
+                console.error("Transaction error fetching cards:", e.target.error);
+                setIsLoadingCards(false);
+            };
+
+        } catch (err) {
+            // Error opening DB
+            setFeedback(`Database error: ${err.message}`);
+            console.error("Database error:", err);
+            setIsLoadingCards(false);
         }
-    }, [gestureModelLoadState, setFeedback]); // Dependencies seem correct
+    // Dependencies: sessionLimit triggers refetch if changed, setFeedback is used.
+    // setIsLoadingCards, setDeckCards etc. are state setters, generally not needed as deps.
+    }, [sessionLimit, setFeedback]);
+
+   
 
     useEffect(() => {
         loadModelsAndData();
@@ -145,69 +203,7 @@ function ReviewFlashcards({ decks, setFeedback }) {
 
 
     // --- Fetch cards for the selected deck (USING nextReviewDate) ---
-    const fetchCardsForDeck = useCallback(async (deckId) => {
-        setIsLoadingCards(true);
-        setFeedback('Loading cards...');
-        try {
-            const db = await openDB();
-            const transaction = db.transaction(STORE_NAME, 'readonly');
-            const store = transaction.objectStore(STORE_NAME);
-            const index = store.index('deckIdIndex');
-            const targetDeckId = deckId ? parseInt(deckId, 10) : UNASSIGNED_DECK_ID;
-            const request = index.getAll(targetDeckId);
-
-            request.onsuccess = () => {
-                const allCardsInDeck = request.result || [];
-                const now = new Date();
-                const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-                console.log(`Found ${allCardsInDeck.length} total cards in deck ID: ${targetDeckId}. Filtering for review based on nextReviewDate...`);
-
-                const cardsForReview = allCardsInDeck.filter(card => {
-                    if (!card.nextReviewDate) { /* ... */ return true; } // Review if no date
-                    try {
-                        const nextReview = new Date(card.nextReviewDate);
-                        if (isNaN(nextReview.getTime())) { /* ... */ return true; } // Review if invalid date
-                        const nextReviewDay = new Date(nextReview.getFullYear(), nextReview.getMonth(), nextReview.getDate());
-                        const isDue = nextReviewDay <= today;
-                        // console.log(` -> Card ID ${card.id}: Next Review: ${nextReviewDay.toLocaleDateString()}, Today: ${today.toLocaleDateString()}, isDue: ${isDue}`);
-                        return isDue;
-                    } catch (e) { /* ... */ return true; } // Review on error
-                });
-
-                console.log(`Found ${cardsForReview.length} cards due for review after filtering.`);
-                const shuffledCards = [...cardsForReview].sort(() => Math.random() - 0.5);
-
-                let cardsForSession = shuffledCards;
-                const limit = parseInt(sessionLimit, 10);
-                if (limit > 0 && shuffledCards.length > limit) {
-                    cardsForSession = shuffledCards.slice(0, limit);
-                    setFeedback(`Showing ${limit} of ${shuffledCards.length} cards due for review.`);
-                } else if (shuffledCards.length > 0) {
-                     setFeedback(`Found ${shuffledCards.length} cards due for review.`);
-                } else {
-                     setFeedback('No cards currently due for review in this deck.');
-                }
-
-                setDeckCards(cardsForSession);
-                setStats({ correct: 0, incorrect: 0, hard: 0, total: cardsForSession.length });
-                setCurrentCardIndex(0);
-                setShowAnswer(false);
-                setHintUsed(false);
-                setHintText('');
-                setShowImageHint(false); // Reset image hint display
-                setReviewActive(cardsForSession.length > 0);
-                setReviewComplete(cardsForSession.length === 0);
-            };
-
-            request.onerror = (e) => { setFeedback(`Error fetching cards: ${e.target.error?.message}`); console.error("Error fetching cards:", e.target.error); setIsLoadingCards(false); };
-            transaction.oncomplete = () => { console.log("Fetch cards transaction complete."); setIsLoadingCards(false); };
-            transaction.onerror = (e) => { setFeedback(`Transaction error fetching cards: ${e.target.error?.message}`); console.error("Transaction error fetching cards:", e.target.error); setIsLoadingCards(false); };
-
-        } catch (err) {
-            setFeedback(`Database error: ${err.message}`); console.error("Database error:", err); setIsLoadingCards(false);
-        }
-    }, [sessionLimit, setFeedback]); // Dependencies verified
+    
 
 
     // --- Start Review Session ---
@@ -319,65 +315,98 @@ function ReviewFlashcards({ decks, setFeedback }) {
             const getRequest = store.get(currentCard.id);
 
             await new Promise((resolve, reject) => {
-                getRequest.onsuccess = (event) => {
-                    const card = event.target.result;
-                    if (!card) { /* ... error handling ... */ reject(new Error('Card not found')); return; }
-
-                    // --- SRS Calculation (Simplified SM-2 Adaptation) ---
-                    let currentEF = card.easeFactor ?? 2.5;
-                    let repetitions = card.repetitions ?? 0;
-                    let currentInterval = card.interval ?? 0; // Interval in days
-                    let quality = 0;
-                    switch (effectiveRating) {
-                        case 'incorrect': quality = 0; break;
-                        case 'hard':      quality = 3; break;
-                        case 'correct':   quality = 5; break;
-                        default:          quality = 3;
+                              // --- NEW getRequest.onsuccess with SRS Calculation ---
+                              getRequest.onsuccess = (event) => {
+                                const card = event.target.result;
+                                if (!card) {
+                                    console.error("Card not found for update:", currentCard.id);
+                                    setFeedback('Error: Card not found in DB during update.');
+                                    reject(new Error('Card not found'));
+                                    return;
+                                }
+            
+                                // --- VVV SRS Calculation (Simplified SM-2 Adaptation) VVV ---
+            
+                                // Get current SRS parameters, providing defaults if missing
+                                let currentEF = card.easeFactor ?? 2.5; // Default ease factor
+                                let repetitions = card.repetitions ?? 0;
+                                let currentInterval = card.interval ?? 0; // Interval in days
+            
+                                // Map rating to SM-2 quality score (0-5)
+                                let quality = 0;
+                                switch (effectiveRating) { // effectiveRating already accounts for hintUsed
+                                    case 'incorrect': quality = 0; break; // Complete failure
+                                    case 'hard':      quality = 3; break; // Pass, but difficult
+                                    case 'correct':   quality = 5; break; // Perfect recall
+                                    default:          quality = 3; // Default case if rating is unexpected
+                                }
+            
+                                // 1. Calculate new Ease Factor (EF) - Always calculated
+                                // Formula: EF' = EF + [0.1 - (5 - q) * (0.08 + (5 - q) * 0.02)]
+                                let newEF = currentEF + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
+                                if (newEF < 1.3) {
+                                    newEF = 1.3; // Clamp EF at minimum 1.3
+                                }
+            
+                                // 2. Calculate new Repetitions and Interval based on quality
+                                let newRepetitions;
+                                let newInterval; // Interval in days
+            
+                                if (quality < 3) { // Failed recall (quality 0, 1, or 2 - we only have 0 mapped)
+                                    newRepetitions = 0; // Reset repetition count
+                                    newInterval = 1;    // Reschedule for the next day (can be set to 0 for same-day review if preferred)
+                                    // Keep the adjusted newEF calculated above
+                                } else { // Correct recall (quality >= 3 - includes 'hard' and 'correct')
+                                    newRepetitions = repetitions + 1;
+                                    if (newRepetitions === 1) {
+                                        newInterval = 1; // First successful recall, review next day
+                                    } else if (newRepetitions === 2) {
+                                        newInterval = 6; // Second successful recall, review in 6 days (typical)
+                                    } else {
+                                        // Subsequent recalls: interval grows based on previous interval and *current* ease factor
+                                        newInterval = Math.ceil(currentInterval * currentEF); // Use currentEF before it was updated this round
+                                    }
+                                }
+            
+                                // 3. Calculate the next review date
+                                const today = new Date();
+                                // Create a new date object for calculation to avoid modifying 'today' directly if needed elsewhere
+                                const nextReviewDate = new Date(today);
+                                nextReviewDate.setDate(today.getDate() + newInterval); // Add the calculated interval days
+            
+                                // 4. Construct the updated card object, preserving other fields
+                                const updatedCard = {
+                                    ...card, // Preserve front, back, notes, tags, deckId, hintImageUrl, createdAt etc.
+                                    easeFactor: newEF,
+                                    interval: newInterval,
+                                    repetitions: newRepetitions,
+                                    lastReviewed: new Date().toISOString(), // Record this review time
+                                    nextReviewDate: nextReviewDate.toISOString(), // Store the calculated date
+                                    // bucket: undefined // Explicitly remove the old bucket field if desired
+                                };
+                                // --- ^^^ END SRS Calculation ^^^ ---
+            
+            
+                                // 5. Put the updated card back into the database
+                                const putRequest = store.put(updatedCard);
+            
+                                putRequest.onsuccess = () => {
+                                    // Log the relevant SRS updates
+                                    console.log(`Card ${currentCard.id} updated. Rating: ${rating} (Quality: ${quality}). New EF: ${newEF.toFixed(2)}, New Interval: ${newInterval}d. Next Review: ${nextReviewDate.toLocaleDateString()}`);
+                                    resolve(); // Resolve the outer promise on successful update
+                                };
+                                putRequest.onerror = (e) => {
+                                    console.error("Error putting updated card:", e.target.error);
+                                    setFeedback(`Error updating card: ${e.target.error?.message}`);
+                                    reject(e.target.error); // Reject on put error
+                                };
+                            }; // --- END of NEW getRequest.onsuccess logic ---
+                        }); // End await new Promise
+                        // ... rest of handleResponse (moveToNextCard call) ...
+                    } catch (err) {
+                        // ... existing catch block ...
                     }
-
-                    let newEF = Math.max(1.3, currentEF + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)));
-                    let newRepetitions;
-                    let newInterval;
-
-                    if (quality < 3) {
-                        newRepetitions = 0;
-                        newInterval = 1; // Review again tomorrow
-                    } else {
-                        newRepetitions = repetitions + 1;
-                        if (newRepetitions === 1) { newInterval = 1; }
-                        else if (newRepetitions === 2) { newInterval = 6; }
-                        else { newInterval = Math.ceil(currentInterval * currentEF); }
-                    }
-
-                    const today = new Date();
-                    const nextReviewDate = new Date(today.setDate(today.getDate() + newInterval));
-                    // -------------------------------------------------
-
-                    const updatedCard = {
-                        ...card,
-                        easeFactor: newEF,
-                        interval: newInterval,
-                        repetitions: newRepetitions,
-                        lastReviewed: new Date().toISOString(),
-                        nextReviewDate: nextReviewDate.toISOString(),
-                    };
-
-                    const putRequest = store.put(updatedCard);
-                    putRequest.onsuccess = () => { console.log(`Card ${currentCard.id} updated. Rating: ${rating}(${quality}). EF: ${newEF.toFixed(2)}, Int: ${newInterval}d. Next: ${nextReviewDate.toLocaleDateString()}`); resolve(); };
-                    putRequest.onerror = (e) => { console.error("Error putting updated card:", e.target.error); setFeedback(`Error updating card: ${e.target.error?.message}`); reject(e.target.error); };
                 };
-                getRequest.onerror = (e) => { console.error("Error getting card for update:", e.target.error); setFeedback(`Error retrieving card for update: ${e.target.error?.message}`); reject(e.target.error); };
-                transaction.onerror = (e) => { if (!feedback.includes('Error updating card') && !feedback.includes('Error retrieving card')) { setFeedback(`Transaction error during card update: ${e.target.error?.message}`); } console.error("Transaction error during card update:", e.target.error); };
-                transaction.oncomplete = () => { console.log("Card update transaction complete."); };
-            });
-
-            moveToNextCard(); // Move after successful or failed DB update attempt
-
-        } catch (err) {
-            console.error("Error during handleResponse DB operations:", err);
-            moveToNextCard(); // Still move on if DB fails, to avoid getting stuck
-        }
-    };
 
 
     // --- Move to Next Card (UPDATED to reset image hint) ---
