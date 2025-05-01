@@ -6,7 +6,7 @@ import SettingsPage from './SettingsPage';
 // --- IndexedDB Logic (Version 2 - Complete) ---
 // This section MUST be identical in ManageFlashcards.jsx until refactored
 const DB_NAME = 'flashcardDB';
-const DB_VERSION = 2; // Ensure this is 2
+const DB_VERSION = 4; // Ensure this is 2
 const STORE_NAME = 'flashcards';
 const DECKS_STORE_NAME = 'decks';
 const UNASSIGNED_DECK_ID = 0;

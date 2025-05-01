@@ -5,7 +5,7 @@ import ReviewFlashcards from './ReviewFlashcards'; // Import the review componen
 // --- IndexedDB Logic (Version 2 - Complete, but duplicated - Should match App.jsx) ---
 // This section MUST be identical in App.jsx until refactored
 const DB_NAME = 'flashcardDB';
-const DB_VERSION = 2;
+const DB_VERSION = 4;
 const STORE_NAME = 'flashcards';
 const DECKS_STORE_NAME = 'decks';
 let dbPromise = null;
