@@ -1,29 +1,27 @@
-// db.js
 import * as tf from '@tensorflow/tfjs';
 
 export const DB_NAME = 'flashcardDB';
-export const DB_VERSION = 4;
+export const DB_VERSION = 5; // <<< INCREMENTED VERSION TO 5
 export const STORE_NAME = 'flashcards';
 export const DECKS_STORE_NAME = 'decks';
 export const GESTURE_MODEL_STORE_NAME = 'gestureModel';
 export const UNASSIGNED_DECK_ID = 0;
 
 let dbInstance = null; // Hold the actual DB connection instance
-let openingPromise = null
+let openingPromise = null;
+
 /**
  * Opens and initializes the IndexedDB database.
  * Returns a Promise that resolves with the database instance when ready.
+ * Manages a single connection instance and handles concurrent requests.
  * @returns {Promise<IDBDatabase>}
  */
-
 export function openDB() {
-    // If we already have a valid, open connection, return it directly
-    if (dbInstance && dbInstance.objectStoreNames.length > 0) { // Basic check if connection seems valid
+    // Reuse existing connection or opening promise if available
+    if (dbInstance && dbInstance.objectStoreNames.length > 0) {
         console.log(`DB Util: Reusing existing DB instance (v${dbInstance.version}).`);
         return Promise.resolve(dbInstance);
     }
-
-    // If an opening operation is already in progress, return its promise
     if (openingPromise) {
         console.log(`DB Util: Reusing existing opening promise.`);
         return openingPromise;
@@ -31,62 +29,141 @@ export function openDB() {
 
     console.log(`DB Util: Starting new DB open request for v${DB_VERSION}...`);
     openingPromise = new Promise((resolve, reject) => {
-        console.log(`DB Util: Inside new Promise constructor.`); // <<< LOG
+        console.log(`DB Util: Inside new Promise constructor.`);
         if (typeof indexedDB === 'undefined') {
             console.error("DB Util: IndexedDB not supported.");
-            openingPromise = null; // Reset promise state
+            openingPromise = null;
             return reject(new Error("IndexedDB not supported"));
         }
 
         const request = indexedDB.open(DB_NAME, DB_VERSION);
-        console.log(`DB Util: indexedDB.open called.`); // <<< LOG
+        console.log(`DB Util: indexedDB.open called for "${DB_NAME}" v${DB_VERSION}.`);
 
+        // ========================================================
+        // == THE FULL SCHEMA DEFINITION IS HERE                 ==
+        // ========================================================
         request.onupgradeneeded = (event) => {
-            // ... (Keep your full V1, V2, V3, V4 upgrade logic here) ...
-            console.log(`DB Util: onupgradeneeded event fired (Old: ${event.oldVersion}, New: ${event.newVersion}).`);
-            // ... schema changes ...
-            console.log(`DB Util: onupgradeneeded finished processing.`);
-        };
+            console.log(`DB Util: onupgradeneeded event fired (Old version: ${event.oldVersion}, New version: ${event.newVersion}).`);
+            const db = event.target.result;
+            const transaction = event.target.transaction; // Use this transaction
+
+            // --- V1 Schema ---
+            if (event.oldVersion < 1) {
+                console.log("DB Util: Creating schema for v1...");
+                if (!db.objectStoreNames.contains(STORE_NAME)) {
+                    const flashcardStore = db.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
+                    // Add indexes needed by App/ManageFlashcards
+                    flashcardStore.createIndex('deckIdIndex', 'deckId', { unique: false }); // For filtering by deck in Manage
+                    console.log(`DB Util: Object store '${STORE_NAME}' created with indexes.`);
+                }
+                if (!db.objectStoreNames.contains(DECKS_STORE_NAME)) {
+                    const deckStore = db.createObjectStore(DECKS_STORE_NAME, { keyPath: 'id', autoIncrement: true });
+                    deckStore.createIndex('name', 'name', { unique: false });
+                    console.log(`DB Util: Object store '${DECKS_STORE_NAME}' created.`);
+
+                    // Add default deck after structure commit
+                    transaction.addEventListener('complete', () => {
+                        console.log(`DB Util: v1 upgrade complete. Adding default deck.`);
+                        const addDeckTx = db.transaction(DECKS_STORE_NAME, 'readwrite');
+                        const addDeckStore = addDeckTx.objectStore(DECKS_STORE_NAME);
+                        const getReq = addDeckStore.get(UNASSIGNED_DECK_ID);
+                        getReq.onsuccess = () => {
+                            if (!getReq.result) {
+                                console.log("DB Util: Adding default 'Unassigned' deck.");
+                                addDeckStore.put({ id: UNASSIGNED_DECK_ID, name: 'Unassigned', createdAt: new Date().toISOString() });
+                            } else {
+                                console.log("DB Util: Default 'Unassigned' deck already exists.");
+                            }
+                        };
+                        getReq.onerror = (e) => console.error("DB Util: Error checking default deck:", e.target.error);
+                    });
+                }
+            }
+
+            // --- V2 Schema Changes (Add deckId index if migrating from old V1) ---
+            // Note: V1 above now creates the index directly. This ensures it exists if upgrading from an older v1 structure.
+            if (event.oldVersion < 2) {
+                console.log("DB Util: Applying schema changes for v2 (ensure deckIdIndex)...");
+                if (db.objectStoreNames.contains(STORE_NAME)) {
+                    try {
+                        const flashcardStore = transaction.objectStore(STORE_NAME);
+                        if (!flashcardStore.indexNames.contains('deckIdIndex')) {
+                             console.warn("DB Util: Creating 'deckIdIndex' on flashcards during v2 check (should have existed).");
+                             flashcardStore.createIndex('deckIdIndex', 'deckId', { unique: false });
+                        }
+                    } catch (e) {
+                       console.error("DB Util: Error ensuring deckIdIndex for v2 upgrade:", e);
+                    }
+                }
+            }
+
+             // --- V3 Schema Changes (Example: Placeholder) ---
+             if (event.oldVersion < 3) {
+                  console.log("DB Util: Applying schema changes for v3 (if any)...");
+             }
+
+
+            // --- V4 Schema Changes (Add Gesture Model Store) ---
+            if (event.oldVersion < 4) {
+                console.log("DB Util: Applying schema changes for v4 (add gestureModel)...");
+                if (!db.objectStoreNames.contains(GESTURE_MODEL_STORE_NAME)) {
+                    db.createObjectStore(GESTURE_MODEL_STORE_NAME, { keyPath: 'id' });
+                    console.log(`DB Util: Object store '${GESTURE_MODEL_STORE_NAME}' created.`);
+                } else {
+                    console.log(`DB Util: Object store '${GESTURE_MODEL_STORE_NAME}' already exists.`);
+                }
+            }
+
+             // --- V5 Schema Changes (Ensure gestureModel exists if upgrading from broken V4) ---
+             if (event.oldVersion < 5) {
+                  console.log("DB Util: Applying schema changes for v5 (ensure gestureModel)...");
+                  // Check AGAIN in case upgrading from a v4 that didn't have it
+                  if (!db.objectStoreNames.contains(GESTURE_MODEL_STORE_NAME)) {
+                      console.warn(`DB Util: Creating '${GESTURE_MODEL_STORE_NAME}' during V5 upgrade check (should have existed!).`);
+                      db.createObjectStore(GESTURE_MODEL_STORE_NAME, { keyPath: 'id' });
+                  }
+                  // Add any NEW V5 specific changes here...
+             }
+
+            console.log(`DB Util: onupgradeneeded finished processing for target v${DB_VERSION}.`);
+        }; // End of onupgradeneeded
+        // ========================================================
 
         request.onsuccess = (event) => {
-            console.log("DB Util: request.onsuccess fired."); // <<< LOG
-            dbInstance = event.target.result; // Store the successful connection
+            console.log("DB Util: request.onsuccess fired.");
+            dbInstance = event.target.result;
             console.log(`DB Util: DB "${DB_NAME}" connection established (v${dbInstance.version}).`);
-            dbInstance.onversionchange = () => { // Handle external version change requests
+            // Attach listeners
+            dbInstance.onversionchange = () => {
                  console.warn("DB Util: Database version change requested elsewhere. Closing connection.");
-                 dbInstance?.close();
-                 dbInstance = null;
-                 openingPromise = null;
+                 dbInstance?.close(); dbInstance = null; openingPromise = null;
             };
             dbInstance.onclose = () => {
                  console.warn('DB Util: DB connection closed.');
-                 dbInstance = null;
-                 openingPromise = null; // Allow reopening
+                 dbInstance = null; openingPromise = null;
             };
-            dbInstance.onerror = (errEvent) => { // Generic handler on the connection
+            dbInstance.onerror = (errEvent) => {
                  console.error("DB Util: Generic DB connection error:", errEvent.target.error);
-                 // Don't necessarily nullify dbPromise here, maybe connection is still partially usable? Depends.
             };
-            openingPromise = null; // Clear the opening promise now we have an instance
-            resolve(dbInstance); // Resolve with the DB instance
-            console.log("DB Util: resolve(dbInstance) called."); // <<< LOG
+            openingPromise = null; // Clear promise
+            resolve(dbInstance); // Resolve
+            console.log("DB Util: resolve(dbInstance) called from onsuccess.");
         };
 
         request.onerror = (event) => {
-            console.error("DB Util: request.onerror fired:", event.target.error); // <<< LOG
-            openingPromise = null; // Reset promise state on error
-            reject(event.target.error); // Reject the promise
-            console.log("DB Util: reject(error) called from onerror."); // <<< LOG
+            console.error("DB Util: request.onerror fired:", event.target.error);
+            openingPromise = null;
+            reject(event.target.error);
+            console.log("DB Util: reject(error) called from onerror.");
         };
 
         request.onblocked = (event) => {
-            // This implies an upgrade is needed but blocked by another connection
-            console.warn("DB Util: request.onblocked fired. Close other tabs/windows using this extension.", event); // <<< LOG
-            openingPromise = null; // Reset promise state
-            reject(new Error(`Database open blocked (v${DB_VERSION}). Close other tabs.`)); // Reject the promise
-             console.log("DB Util: reject(error) called from onblocked."); // <<< LOG
+            console.warn("DB Util: request.onblocked fired. Close other tabs/windows.", event);
+            openingPromise = null;
+            reject(new Error(`Database open blocked (v${DB_VERSION}). Close other tabs.`));
+            console.log("DB Util: reject(error) called from onblocked.");
        };
-        console.log("DB Util: Event listeners attached to request."); // <<< LOG
+        console.log("DB Util: Event listeners attached to request.");
     });
 
     return openingPromise;

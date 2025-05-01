@@ -1,104 +1,11 @@
-// react-popup-src/src/App.jsx
 import React, { useState, useEffect, useCallback } from 'react';
 import ManageFlashcards from './ManageFlashcards'; // Import the child component
 import SettingsPage from './SettingsPage';
-
-// --- IndexedDB Logic (Version 2 - Complete) ---
-// This section MUST be identical in ManageFlashcards.jsx until refactored
-const DB_NAME = 'flashcardDB';
-const DB_VERSION = 4; // Ensure this is 2
-const STORE_NAME = 'flashcards';
-const DECKS_STORE_NAME = 'decks';
-const UNASSIGNED_DECK_ID = 0;
+// VVVV ADD THIS IMPORT VVVV
+import { openDB, DB_NAME, STORE_NAME, DECKS_STORE_NAME, UNASSIGNED_DECK_ID } from './db.js'; // KEEP THIS LINE
 let dbPromise = null;
 
-function openDB() {
-    if (dbPromise && dbPromise.readyState !== 'done') {
-        // Avoid race conditions if already opening
-        return dbPromise;
-    }
-    console.log(`App: Opening/Requesting DB: ${DB_NAME} v${DB_VERSION}`);
-    dbPromise = new Promise((resolve, reject) => {
-        if (typeof indexedDB === 'undefined') {
-           return reject(new Error("IndexedDB not supported by this browser."));
-        }
-        const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-        request.onupgradeneeded = (event) => {
-            const currentVersion = event.oldVersion;
-            console.log(`App: DB upgrade needed from v${currentVersion} to v${DB_VERSION}.`);
-            const tempDb = event.target.result;
-            const transaction = event.target.transaction; // Use the upgrade transaction
-
-            // Create 'flashcards' store if it doesn't exist (from version 1)
-            if (!tempDb.objectStoreNames.contains(STORE_NAME)) {
-                console.log(`App: Creating object store: ${STORE_NAME}`);
-                tempDb.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
-            }
-
-            // --- Changes for Version 2 ---
-            if (currentVersion < 2) {
-                // Create 'decks' store
-                if (!tempDb.objectStoreNames.contains(DECKS_STORE_NAME)) {
-                    console.log(`App: Creating object store: ${DECKS_STORE_NAME}`);
-                    tempDb.createObjectStore(DECKS_STORE_NAME, { keyPath: 'id', autoIncrement: true });
-                }
-
-                // Add 'deckId' index to 'flashcards' store (if the store exists)
-                // Ensure we work within the upgrade transaction context
-                if (transaction && transaction.objectStoreNames.contains(STORE_NAME)) {
-                    try {
-                        const flashcardStore = transaction.objectStore(STORE_NAME);
-                        if (!flashcardStore.indexNames.contains('deckIdIndex')) {
-                            console.log(`App: Creating index 'deckIdIndex' on store: ${STORE_NAME}`);
-                            flashcardStore.createIndex('deckIdIndex', 'deckId', { unique: false });
-                        }
-                    } catch (e) {
-                        console.error("App: Error creating index during upgrade:", e);
-                        // Optionally reject or just warn, depending on how critical the index is initially
-                        // reject(e); // This would stop the upgrade potentially
-                    }
-                } else {
-                    console.warn("App: Flashcards store not available in upgrade transaction for index creation.");
-                    // This might happen if the store creation itself failed earlier in the upgrade
-                }
-            }
-            // --- End Changes for Version 2 ---
-            console.log('App: DB upgrade transaction finished.');
-            // Note: onsuccess for the open request runs *after* onupgradeneeded completes.
-        };
-
-        request.onsuccess = (e) => {
-            const db = e.target.result;
-            console.log(`App: DB "${DB_NAME}" opened successfully (v${db.version}).`);
-            // Generic error handler for the connection after it's open
-            db.onerror = (errEvent) => {
-                console.error("App: Generic DB connection error:", errEvent.target.error);
-                dbPromise = null; // Allow trying to reopen
-            };
-            db.onclose = () => {
-                console.warn('App: DB connection closed unexpectedly.');
-                dbPromise = null; // Allow reopening
-            };
-            resolve(db); // Resolve the promise with the db connection
-        };
-
-        request.onerror = (e) => {
-            console.error("App: Error opening DB:", e.target.error);
-            dbPromise = null; // Allow retrying
-            reject(e.target.error);
-        };
-
-        request.onblocked = (e) => {
-            // This occurs if another tab has an older version of the DB open
-            console.warn("App: DB open blocked. Please close other tabs with this extension open.", e);
-            dbPromise = null; // Allow retrying
-            reject(new Error("Database connection is blocked. Close other tabs."));
-        }
-    });
-    return dbPromise;
-}
-// --- End: IndexedDB Logic ---
 
 
 function App() {
