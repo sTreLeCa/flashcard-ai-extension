@@ -1,12 +1,17 @@
-// jsconfig.json (in project root)
+// jsconfig.json (Place in the project root directory)
 {
   "compilerOptions": {
     "module": "ESNext",
     "target": "ES2020",
     "checkJs": true,
     "strict": false,
-    "lib": ["ES2020", "WebWorker"],
-    "types": ["chrome"], // <--- ADD THIS LINE EXPLICITLY
+    "lib": [
+      "ES2020",
+      "WebWorker", // Keep this for background.js
+      "DOM", // <--- ADD THIS for window, document, etc.
+      "DOM.Iterable" // <--- ADD THIS for DOM iteration features
+    ],
+    "types": ["chrome"], // Keep this explicit addition
     "baseUrl": "."
   },
   "include": [
