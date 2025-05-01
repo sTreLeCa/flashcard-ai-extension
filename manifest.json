@@ -9,12 +9,14 @@
     "scripting"
   ],
   "host_permissions": [
-    "https://tfhub.dev/*" 
+    "https://tfhub.dev/*",
+    "https://storage.googleapis.com/*", 
+    "https://www.kaggle.com/*"
   ],
   "action": {
-  "default_popup": "react-popup-src/dist/index.html",
-  "default_title": "Flashcard AI"
-},
+    "default_popup": "react-popup-src/dist/index.html",
+    "default_title": "Flashcard AI"
+  },
   "background": {
     "service_worker": "background.js"
   },
@@ -25,6 +27,8 @@
     }
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://tfhub.dev;"
+
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' https://tfhub.dev https://www.kaggle.com https://storage.googleapis.com;"
+  
   }
 }
