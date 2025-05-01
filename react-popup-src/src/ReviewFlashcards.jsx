@@ -15,6 +15,9 @@ const GESTURE_MODEL_LOADED_STATE = { IDLE: 'idle', LOADING: 'loading', LOADED: '
 // Component Definition
 function ReviewFlashcards({ decks, setFeedback }) { // Use setFeedback prop from App
 
+    const GESTURE_CONFIDENCE_THRESHOLD = 0.85;
+    const [detectedGesture, setDetectedGesture] = useState(null);
+
     // --- State Variables ---
     // Keep existing review state...
     const [selectedDeckId, setSelectedDeckId] = useState('');
@@ -32,10 +35,21 @@ function ReviewFlashcards({ decks, setFeedback }) { // Use setFeedback prop from
     // Add with other state
     const [isVideoReady, setIsVideoReady] = useState(false);
 
+
+// Add with other state
+const [videoElement, setVideoElement] = useState(null);
+    // --- State/Refs for Webcam and TFJS (Copied/Adapted from SettingsPage) ---
+    const videoRef = useRef(null);
+    const [stream, setStream] = useState(null);
+    const [videoReady, setVideoReady] = useState(false);
+    const [webcamError, setWebcamError] = useState('');
+    // <<< ADD
+
     // --- State/Refs for Webcam and TFJS (Copied/Adapted from SettingsPage) ---
     const videoRef = useRef(null); // <<< ADD
     const [stream, setStream] = useState(null); // <<< ADD
     const [webcamError, setWebcamError] = useState(''); // <<< ADD
+
     const [knn, setKnn] = useState(null); // <<< ADD
     const [mobilenetModel, setMobilenetModel] = useState(null); // <<< ADD
     const [gestureModelLoadState, setGestureModelLoadState] = useState(GESTURE_MODEL_LOADED_STATE.IDLE); // <<< ADD
@@ -53,6 +67,94 @@ function ReviewFlashcards({ decks, setFeedback }) { // Use setFeedback prop from
     
             let knnInstance = null; // Temporary instance
     
+            try {
+                // console.log("Attempting to set TFJS backend to CPU...");
+                // await tf.setBackend('cpu');
+                // await tf.ready(); // Wait for backend to be ready
+                // console.log(">>> Review: TFJS Backend explicitly set to:", tf.getBackend());
+                const mobilenetLoadPromise = mobilenet.load(); // Start loading mobilenet
+                knnInstance = knnClassifier.create(); // Create KNN instance
+                setKnn(knnInstance); // Set state early
+                console.log("Review: KNN Classifier created.");
+    
+                // Load saved KNN data into the instance
+                const loadedCounts = await loadGestureModel(knnInstance); // Call imported function
+                setLoadedClassCounts(loadedCounts || {});
+                console.log("Review: KNN Classifier data loaded. Counts:", loadedCounts);
+    
+                // Wait for mobilenet to finish loading
+                const mobilenetInstance = await mobilenetLoadPromise;
+                setMobilenetModel(mobilenetInstance);
+                console.log("Review: MobileNet loaded.");
+    
+                setGestureModelLoadState(GESTURE_MODEL_LOADED_STATE.LOADED);
+                setFeedback("Recognition models ready.");
+                setTimeout(() => setFeedback(''), 1500);
+    
+            } catch (error) {
+                console.error("Review: Error loading models/data:", error);
+                setFeedback(`Error loading models: ${error.message}`);
+                setGestureModelLoadState(GESTURE_MODEL_LOADED_STATE.FAILED);
+                setMobilenetModel(null); setKnn(null); // Reset on failure
+            }
+        }, [gestureModelLoadState, setFeedback]); // Dependencies
+    
+        // Load models when component first mounts
+        useEffect(() => {
+            loadModelsAndData();
+        }, [loadModelsAndData]); // Run once
+
+    // --- Webcam Control Functions ---
+        // --- Webcam Control Functions ---
+        const startWebcam = useCallback(async () => {
+            setWebcamError('');
+            setVideoReady(false);
+        
+            try {
+                const mediaStream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        width: { ideal: 320 },
+                        height: { ideal: 240 },
+                        facingMode: 'user'
+                    }
+                });
+                console.log("🎥 Webcam access granted:", mediaStream.id);
+         setStream(mediaStream); // Set stream state triggers re-render
+         return mediaStream;
+            } catch (err) {
+                console.error("❌ Webcam error:", err);
+                setWebcamError(`Webcam error: ${err.message}`);
+                setStream(null);
+                return null; // <<< RETURN NULL on failure
+            }
+        }, []);
+        
+        
+
+        // --- useEffect to connect stream if video already exists ---
+// Inside ReviewFlashcards.jsx
+// Inside ReviewFlashcards.jsx
+useEffect(() => {
+    if (stream && videoElement) {
+         // ---> ADD THIS LOG <---
+         console.log(`>>> useEffect[stream, videoElement]: Attaching stream ${stream.id} to video element. Current srcObject:`, videoElement.srcObject);
+        if (videoElement.srcObject !== stream) {
+            videoElement.srcObject = stream;
+            videoElement.play().catch(e => console.error(">>> useEffect[stream, videoElement]: Video play() failed:", e));
+        }
+    } else if (!stream && videoElement && videoElement.srcObject) {
+        console.log(">>> useEffect[stream, videoElement]: Stream is null, clearing srcObject.");
+        videoElement.srcObject = null;
+    }
+     // ---> ADD THIS LOG to see state values when hook runs <---
+     console.log(`>>> useEffect[stream, videoElement] check: stream=${!!stream}, videoElement=${!!videoElement}`);
+
+}, [stream, videoElement]);
+        
+        
+        
+        
+=======
             try {
                 await tf.ready();
                 console.log("Review: TFJS Backend:", tf.getBackend());
@@ -140,6 +242,7 @@ function ReviewFlashcards({ decks, setFeedback }) { // Use setFeedback prop from
                 return null;
             }
         }, []);
+
         
     
         const stopWebcam = useCallback(() => {
@@ -153,6 +256,69 @@ function ReviewFlashcards({ decks, setFeedback }) { // Use setFeedback prop from
         // --- Cleanup Webcam on Unmount ---
         useEffect(() => { return () => { stopWebcam(); }; }, [stopWebcam]);
     
+
+        const videoRefCallback = useCallback((node) => {
+            // Log entry point
+            console.log(`Review: videoRefCallback called. Node: ${node ? 'Exists' : 'Null'}`);
+        
+            if (node) { // Node is MOUNTED
+                // Log node received
+                console.log(">>> videoRefCallback: Node received, setting videoElement state.", node);
+                // Set videoElement state
+                setVideoElement(node);
+        
+                // --- Attach Event Listeners Directly to the Node ---
+                // Use function assignment for oncanplay, onerror, onstalled
+                // This ensures previous handlers are replaced if the callback runs again for the same node (unlikely but safe)
+                node.oncanplay = () => {
+                    console.log(">>> videoRefCallback: onCanPlay event fired on node <<<");
+                    setIsVideoReady(true);
+                };
+                node.onerror = (e) => {
+                    console.error("Video Error in Callback Ref:", e);
+                    setIsVideoReady(false); // Set not ready on error
+                };
+                node.onstalled = () => {
+                    console.warn("Video Stalled in Callback Ref");
+                    setIsVideoReady(false); // Set not ready if stalled
+                };
+                // Optional: If you still need handleVideoError for other purposes, keep addEventListener/removeEventListener pair
+                // node.addEventListener('error', handleVideoError);
+        
+        
+                // --- Attempt to attach stream IF stream is ready when node mounts ---
+                // The useEffect hook will handle cases where the stream arrives later
+                if (stream && node.srcObject !== stream) {
+                    console.log(">>> videoRefCallback: Attaching existing stream to newly mounted node.");
+                    node.srcObject = stream;
+                    node.play().catch(e => console.error("Video play() failed in callback ref:", e));
+                } else if (!stream) {
+                     console.log(">>> videoRefCallback: Node mounted, but stream is not ready yet.");
+                } else {
+                     console.log(">>> videoRefCallback: Node mounted, stream already attached.");
+                }
+        
+            } else { // Node is UNMOUNTED
+                // Log unmount
+                console.log("Review: videoRefCallback - Node unmounted.");
+                // Log clearing state
+                console.log(">>> videoRefCallback: Node is null (unmounting?), clearing videoElement state.");
+        
+                // --- Cleanup ---
+                // Get the node from state *before* clearing it, if needed for listener removal
+                // const currentVideoNode = videoElement;
+                // if (currentVideoNode) {
+                //     // Remove specific listeners if added with addEventListener
+                //     // currentVideoNode.removeEventListener('error', handleVideoError);
+                // }
+        
+                // Clear states
+                setVideoElement(null);
+                setIsVideoReady(false);
+            }
+        // Ensure stream is the only dependency needed here, as state setters don't need to be listed
+        }, [stream]);
+        
 
         const handleVideoPlay = useCallback(() => {
             console.log("Review: Video playing event - video dimensions:", 
@@ -201,6 +367,7 @@ function ReviewFlashcards({ decks, setFeedback }) { // Use setFeedback prop from
         
             tryAttachStream();
         }, [stream, handleVideoPlay, handleVideoError]);
+
         
 
     // Fetch cards for the selected deck
@@ -320,6 +487,162 @@ function ReviewFlashcards({ decks, setFeedback }) { // Use setFeedback prop from
     }, [sessionLimit, setFeedback]); // Add sessionLimit dependency
 
     // Start the review session
+
+    // Replace the existing handleStartReview with this:
+const handleStartReview = async () => {
+    if (!selectedDeckId) {
+        setFeedback('Please select a deck first.');
+        return;
+    }
+    if (gestureModelLoadState === GESTURE_MODEL_LOADED_STATE.LOADING) {
+        setFeedback('Models loading...');
+        return;
+    }
+    if (gestureModelLoadState !== GESTURE_MODEL_LOADED_STATE.LOADED || !knn || knn.getNumClasses() === 0) {
+         // Also check if model is loaded and TRAINED, otherwise review makes no sense
+         setFeedback('Models not loaded or no gestures trained yet.');
+         console.warn("Review start blocked: Models not ready or not trained.");
+        return;
+    }
+
+    setReviewComplete(false);
+    setReviewActive(true); // Trigger re-render, which should mount the video element
+    setFeedback('Starting webcam...');
+    stopWebcam(); // Ensure clean start (stops previous stream & prediction loop)
+
+    // --- Start webcam immediately ---
+    const streamStarted = await startWebcam(); // Call startWebcam directly
+
+    if (!streamStarted) {
+        console.error("Review: Webcam failed to start in handleStartReview.");
+        // Optionally reset state if webcam fails critically
+        // setReviewActive(false);
+        // setFeedback is likely set within startWebcam on error
+    } else {
+        console.log("Review: Webcam started successfully in handleStartReview. Component should re-render with stream.");
+        // Fetch cards AFTER webcam is confirmed to start (or maybe even after video is ready?)
+        // Let's fetch cards here for now, assuming webcam start is the main prerequisite
+         await fetchCardsForDeck(selectedDeckId);
+    }
+};
+    
+
+    // Inside ReviewFlashcards.jsx component
+
+// Inside ReviewFlashcards.jsx component
+
+// Inside ReviewFlashcards.jsx component
+
+// Inside ReviewFlashcards.jsx -> runPrediction useCallback
+
+const runPrediction = useCallback(async () => {
+    // Guard clause remains essential
+    if (!videoElement || !isVideoReady || videoElement.readyState < HTMLMediaElement.HAVE_ENOUGH_DATA || !knn || !mobilenetModel || !stream) {
+        // console.log("Skipping prediction: Prerequisites not met."); // Keep for debugging if needed
+        return;
+    }
+
+    let frameTensor = null;
+    let logits = null;
+    let result = null;
+
+    try {
+        // 1. Get frame tensor
+        frameTensor = tf.browser.fromPixels(videoElement);
+
+        // 2. Get logits from MobileNet using the frame tensor
+        logits = mobilenetModel.infer(frameTensor, true);
+
+        // 3. Dispose the frameTensor immediately after inference.
+        if (frameTensor) {
+             tf.dispose(frameTensor);
+             frameTensor = null;
+        }
+
+        // 4. Validate the logits tensor
+        if (!logits || logits.isDisposed) {
+             console.error("Prediction Error: Logits are null or disposed before KNN call.");
+             setCurrentPrediction({ label: 'Error', confidence: 0 });
+             if(logits && !logits.isDisposed) tf.dispose(logits);
+             return;
+        }
+
+        // 5. Perform the KNN prediction using the logits tensor.
+        // console.log(`>>> Before knn.predictClass: logits.isDisposed = ${logits.isDisposed}`); // Optional log
+        result = await knn.predictClass(logits, 3); // k=3 neighbors
+        // console.log(">>> After knn.predictClass returned."); // Optional log
+
+        // 6. Process the prediction result.
+        if (result?.label && result.confidences) {
+            const confidenceScore = result.confidences[result.label] || 0;
+            // console.log(`>>> Prediction Result: ${result.label} (${confidenceScore.toFixed(3)})`); // Optional log
+            setCurrentPrediction({
+                label: result.label,
+                confidence: confidenceScore
+            });
+        } else {
+            // console.log(">>> Prediction Result: Invalid or null."); // Optional log
+            setCurrentPrediction({ label: '...', confidence: 0 });
+        }
+
+    } catch (error) {
+        console.error("Prediction error occurred during REAL prediction:", error);
+        setCurrentPrediction({ label: 'Error', confidence: 0 });
+    } finally {
+        // 7. Cleanup logits
+        if (logits && !logits.isDisposed) {
+            tf.dispose(logits);
+        }
+         // Double check frameTensor disposal
+        if (frameTensor && !frameTensor.isDisposed) {
+             tf.dispose(frameTensor);
+        }
+        // console.log(">>> Real prediction function finished."); // Optional log
+    }
+}, [videoElement, isVideoReady, knn, mobilenetModel, stream, setCurrentPrediction]);
+
+
+    // --- Effect to Start/Stop Prediction Loop ---
+    // Inside ReviewFlashcards.jsx
+
+    // Inside ReviewFlashcards.jsx component
+
+    // --- Effect to Start/Stop Prediction Loop ---
+    // Inside ReviewFlashcards.jsx
+
+useEffect(() => {
+    // Start loop ONLY if review is active, not complete, stream exists,
+    // models are loaded/trained, AND video is ready
+    if (reviewActive && !reviewComplete && stream && knn && mobilenetModel && knn.getNumClasses() > 0 && isVideoReady) {
+        console.log(">>> Review: Starting prediction loop (Video Ready).");
+        // Clear any existing interval before starting a new one
+        if (predictionIntervalRef.current) {
+            clearInterval(predictionIntervalRef.current);
+        }
+        // Start the prediction loop
+        predictionIntervalRef.current = setInterval(runPrediction, 200); // Adjust interval (200ms = 5fps)
+    } else {
+        // Stop the loop if conditions are not met
+        if (predictionIntervalRef.current) {
+            console.log(">>> Review: Stopping prediction loop (Conditions not met).");
+            clearInterval(predictionIntervalRef.current);
+            predictionIntervalRef.current = null;
+        }
+    }
+    // Cleanup interval on unmount or when dependencies change
+    return () => {
+        if (predictionIntervalRef.current) {
+            console.log(">>> Cleanup: Clearing prediction interval.");
+            clearInterval(predictionIntervalRef.current);
+            predictionIntervalRef.current = null;
+        }
+    };
+// Dependencies that control the loop start/stop
+}, [reviewActive, reviewComplete, stream, knn, mobilenetModel, runPrediction, isVideoReady]);
+
+
+
+
     const handleStartReview = async () => {
         if (!selectedDeckId) { setFeedback('Please select a deck first.'); return; }
         if (gestureModelLoadState === GESTURE_MODEL_LOADED_STATE.LOADING) { setFeedback('Models loading...'); return; }
@@ -392,6 +715,7 @@ frameTensor = tf.browser.fromPixels(debugCanvas);
         // Cleanup interval on unmount or when dependencies change
         return () => { if (predictionIntervalRef.current) { clearInterval(predictionIntervalRef.current); predictionIntervalRef.current = null; }};
     }, [reviewActive, reviewComplete, stream, knn, mobilenetModel, runPrediction]);
+
     // Generate hint from answer text
     const generateHint = (answerText) => {
         // Simple hint generation - show first letter of each word and blanks for rest
@@ -425,6 +749,19 @@ frameTensor = tf.browser.fromPixels(debugCanvas);
 
     // Handle user response to a card (Correct, Hard, Incorrect)
     const handleResponse = async (rating) => { // rating: 'correct', 'hard', 'incorrect'
+
+        if (!reviewActive || currentCardIndex >= deckCards.length) {
+             console.warn("handleResponse called when review not active or finished.");
+             return; // Exit if review isn't active or no card is present
+        }
+    
+        const effectiveRating = hintUsed ? 'hard' : rating; // If hint was used, treat as "hard"
+    
+        // --- Visual Feedback ---
+        setFeedbackAnimation(rating); // Show visual feedback based on actual button/gesture intent
+        // **NO setTimeout or startWebcam here!**
+    
+
         if (!reviewActive || currentCardIndex >= deckCards.length) return;
 
         const effectiveRating = hintUsed ? 'hard' : rating; // If hint was used, treat response as "hard" (less severe than incorrect)
@@ -445,110 +782,121 @@ frameTensor = tf.browser.fromPixels(debugCanvas);
         }, 400); // was 100ms
          // Clear animation
 
-        const currentCard = deckCards[currentCardIndex];
 
-        // Update statistics based on actual rating (not effective rating)
+        const currentCard = deckCards[currentCardIndex];
+    
+        // --- Update Statistics ---
         setStats(prev => ({
             ...prev,
             correct: prev.correct + (rating === 'correct' ? 1 : 0),
             hard: prev.hard + (rating === 'hard' ? 1 : 0),
             incorrect: prev.incorrect + (rating === 'incorrect' ? 1 : 0)
         }));
-
+    
+        // --- Update Card in IndexedDB ---
         try {
             const db = await openDB();
             const transaction = db.transaction(STORE_NAME, 'readwrite');
             const store = transaction.objectStore(STORE_NAME);
             const getRequest = store.get(currentCard.id);
-
-            getRequest.onsuccess = (event) => {
-                const card = event.target.result;
-                if (!card) {
-                    setFeedback('Error: Card not found in database during update.');
-                    console.error("Card not found for update:", currentCard.id);
-                    moveToNextCard(); // Try to proceed gracefully
-                    return;
-                }
-
-                // Determine the current bucket, defaulting to 0 if undefined/invalid
-                let oldBucket = (card.bucket !== undefined && card.bucket >= MIN_BUCKET && card.bucket <= MAX_BUCKET) ? Number(card.bucket) : 0;
-                let newBucket;
-
-                // --- SRS Logic based on effective rating ---
-                switch (effectiveRating) {
-                    case 'correct':
-                        newBucket = Math.min(MAX_BUCKET, oldBucket + 1);
-                        break;
-                    case 'hard':
-                        // Move down one bucket, but stay at least at MIN_BUCKET
-                        newBucket = Math.max(MIN_BUCKET, oldBucket - 1);
-                        break;
-                    case 'incorrect':
-                    default:
-                        // Reset to bucket 0 on incorrect
-                        newBucket = 0;
-                        break;
-                }
-                // --- End SRS Logic ---
-
-                const updatedCard = {
-                    ...card,
-                    bucket: newBucket,
-                    lastReviewed: new Date().toISOString() // Update last reviewed time
+    
+            // Use a Promise to handle the async nature of DB operations within handleResponse
+            await new Promise((resolve, reject) => {
+                getRequest.onsuccess = (event) => {
+                    const card = event.target.result;
+                    if (!card) {
+                        console.error("Card not found for update:", currentCard.id);
+                        setFeedback('Error: Card not found in DB during update.');
+                        reject(new Error('Card not found')); // Reject the promise
+                        return;
+                    }
+    
+                    let oldBucket = (card.bucket !== undefined && card.bucket >= MIN_BUCKET && card.bucket <= MAX_BUCKET) ? Number(card.bucket) : 0;
+                    let newBucket;
+    
+                    switch (effectiveRating) {
+                        case 'correct': newBucket = Math.min(MAX_BUCKET, oldBucket + 1); break;
+                        case 'hard': newBucket = Math.max(MIN_BUCKET, oldBucket - 1); break;
+                        case 'incorrect': default: newBucket = 0; break;
+                    }
+    
+                    const updatedCard = { ...card, bucket: newBucket, lastReviewed: new Date().toISOString() };
+                    const putRequest = store.put(updatedCard);
+    
+                    putRequest.onsuccess = () => {
+                        console.log(`Card ${currentCard.id} updated. Old Bucket: ${oldBucket}, New Bucket: ${newBucket}, Rating: ${rating} (Effective: ${effectiveRating})`);
+                        resolve(); // Resolve the promise on successful update
+                    };
+                    putRequest.onerror = (e) => {
+                        console.error("Error putting updated card:", e.target.error);
+                        setFeedback(`Error updating card: ${e.target.error?.message}`);
+                        reject(e.target.error); // Reject on put error
+                    };
                 };
-
-                const putRequest = store.put(updatedCard);
-
-                putRequest.onsuccess = () => {
-                    console.log(`Card ${currentCard.id} updated. Old Bucket: ${oldBucket}, New Bucket: ${newBucket}, Rating: ${rating} (Effective: ${effectiveRating})`);
-                    moveToNextCard(); // Proceed after successful update
+    
+                getRequest.onerror = (e) => {
+                    console.error("Error getting card for update:", e.target.error);
+                    setFeedback(`Error retrieving card for update: ${e.target.error?.message}`);
+                    reject(e.target.error); // Reject on get error
                 };
-
-                putRequest.onerror = (e) => {
-                    setFeedback(`Error updating card: ${e.target.error?.message}`);
-                    console.error("Error putting updated card:", e.target.error);
-                    moveToNextCard(); // Try to proceed even if update fails
-                };
-            };
-
-            getRequest.onerror = (e) => {
-                setFeedback(`Error retrieving card for update: ${e.target.error?.message}`);
-                console.error("Error getting card for update:", e.target.error);
-                moveToNextCard(); // Try to proceed
-            };
-
-             transaction.onerror = (e) => {
-                 // Don't overwrite specific error messages if already set
-                 if (!feedback.includes('Error updating card') && !feedback.includes('Error retrieving card')) {
-                     setFeedback(`Transaction error during card update: ${e.target.error?.message}`);
-                 }
-                 console.error("Transaction error during card update:", e.target.error);
-             };
-             transaction.oncomplete = () => {
-                 console.log("Card update transaction complete.");
-             };
-
+    
+                 transaction.onerror = (e) => {
+                     if (!feedback.includes('Error updating card') && !feedback.includes('Error retrieving card')) {
+                         setFeedback(`Transaction error during card update: ${e.target.error?.message}`);
+                     }
+                     console.error("Transaction error during card update:", e.target.error);
+                     // Don't reject here necessarily, let request errors handle rejection
+                 };
+                 transaction.oncomplete = () => {
+                     console.log("Card update transaction complete.");
+                     // Resolve might have already happened via putRequest.onsuccess
+                 };
+            });
+    
+            // --- Move to Next Card (Only after DB attempt completes successfully) ---
+             moveToNextCard();
+    
         } catch (err) {
-            setFeedback(`Database error during card update: ${err.message}`);
-            console.error("Database error during update:", err);
-            moveToNextCard(); // Try to proceed
+            console.error("Error during handleResponse DB operations:", err);
+            // Still try to move to the next card even if DB update failed,
+            // otherwise the user gets stuck. The error feedback is already set.
+            moveToNextCard();
+        } finally {
+             // Clear animation after a short delay (e.g., 400ms) AFTER moving to next card
+             // Use a separate timeout state if needed, or just clear it in moveToNextCard
+             // For simplicity, let's rely on moveToNextCard clearing it for now.
+             // setTimeout(() => setFeedbackAnimation(null), 400); // Re-evaluate if needed
         }
     };
 
     // Move to the next card or end review
     const moveToNextCard = () => {
-        const nextIndex = currentCardIndex + 1;
+        const nextIndex = currentCardIndex + 1; // Calculate index of the next card
+
+        // Check if the next index is beyond the available cards in the current deck/session
         if (nextIndex >= deckCards.length) {
-            setReviewComplete(true);
-            setReviewActive(false);
-            setFeedback('Review session completed!');
+            // --- End of Review Session ---
+            console.log("Review complete. No more cards in this session.");
+            setReviewComplete(true); // Mark the review as complete
+            setReviewActive(false);  // Mark the review session as inactive
+                                     // (This will trigger useEffect to stop webcam/prediction loop)
+            setFeedback('Review session completed!'); // Provide user feedback
         } else {
-            setCurrentCardIndex(nextIndex);
-            setShowAnswer(false);
-            setHintUsed(false); // Reset hint status for the new card
-            setHintText(''); // Clear hint text for the new card
-            setFeedbackAnimation(null); // Ensure animation is cleared
+            // --- Move to the Next Card ---
+            console.log(`Moving from card index ${currentCardIndex} to ${nextIndex}`);
+            setCurrentCardIndex(nextIndex); // Update the index state to show the next card
+
+            // Reset states specific to the card being displayed:
+            setShowAnswer(false);      // Hide the answer for the new card
+            setHintUsed(false);        // Reset hint usage status for the new card
+            setHintText('');           // Clear any hint text shown for the previous card
+            // (Feedback is usually set by handleResponse/handleHint)
         }
+
+        // --- Reset Visual Feedback ---
+        // Clear any visual feedback animation (like background color flash)
+        // regardless of whether moving to next card or completing the review.
+        setFeedbackAnimation(null);
     };
 
     // Reset the review state
@@ -568,7 +916,10 @@ frameTensor = tf.browser.fromPixels(debugCanvas);
         setHintText('');
         setIsLoadingCards(false);
     };
-
+    useEffect(() => {
+        console.log("🔍 Render cycle - videoRef.current is:", videoRef.current);
+      });
+      
     // Handle keyboard shortcuts
     useEffect(() => {
         if (!reviewActive) return; // Only listen when review is active
@@ -605,6 +956,105 @@ frameTensor = tf.browser.fromPixels(debugCanvas);
         document.addEventListener('keydown', handleKeyDown);
         return () => document.removeEventListener('keydown', handleKeyDown);
     }, [reviewActive, showAnswer, currentCardIndex, deckCards, hintText, hintUsed]); // Updated dependencies
+
+        // Inside ReviewFlashcards.jsx component
+
+    // Effect Hook: Acts on recognized gestures stored in currentPrediction state
+    useEffect(() => {
+        // Define the confidence threshold required to act on a prediction
+        const GESTURE_CONFIDENCE_THRESHOLD = 0.85; // Adjust this value as needed (0.0 to 1.0)
+
+        // Guard clauses: Only proceed if...
+        // 1. The review session is currently active.
+        // 2. The KNN model instance exists.
+        // 3. The KNN model has been trained with at least one class.
+        if (!reviewActive || !knn || knn.getNumClasses() === 0) {
+            return; // Exit if conditions aren't met
+        }
+
+        // Destructure the label and confidence from the current prediction state
+        const { label, confidence } = currentPrediction;
+
+        // Check if the prediction confidence meets or exceeds the threshold
+        if (confidence >= GESTURE_CONFIDENCE_THRESHOLD) {
+
+            // Log the detected gesture and confidence level
+            console.log(`Review: Detected gesture "${label}" with high confidence (${confidence.toFixed(2)}). Acting...`);
+
+            // Trigger visual feedback (e.g., button highlight)
+            setDetectedGesture(label);
+            // Set a timer to clear the visual feedback after a short duration (e.g., 500ms)
+            const feedbackTimer = setTimeout(() => setDetectedGesture(null), 500);
+
+            let actionTaken = false; // Flag to track if an action was triggered by this detection
+
+            // Determine which action to take based on the predicted label
+            switch (label) {
+                case 'yes':
+                    // Trigger 'correct' response ONLY if the answer is currently shown
+                    if (showAnswer) {
+                        console.log(`   Action: Triggering handleResponse('correct')`);
+                        handleResponse('correct');
+                        actionTaken = true; // Mark that an action was taken
+                    } else {
+                         console.log(`   Action: 'yes' detected, but answer not shown. No action.`);
+                    }
+                    break;
+
+                case 'no':
+                    // Trigger 'incorrect' response ONLY if the answer is currently shown
+                    if (showAnswer) {
+                         console.log(`   Action: Triggering handleResponse('incorrect')`);
+                        handleResponse('incorrect');
+                        actionTaken = true; // Mark that an action was taken
+                    } else {
+                         console.log(`   Action: 'no' detected, but answer not shown. No action.`);
+                    }
+                    break;
+
+                case 'hint':
+                    // Trigger hint action ONLY if the answer is NOT currently shown
+                    if (!showAnswer) {
+                         console.log(`   Action: Triggering handleHint()`);
+                        handleHint(); // Assuming handleHint doesn't cause immediate loops
+                        actionTaken = true; // Mark that an action was taken
+                    } else {
+                         console.log(`   Action: 'hint' detected, but answer already shown. No action.`);
+                    }
+                    break;
+
+                // Add cases for other potential gestures ('reveal', 'hard', etc.) if trained
+                default:
+                     console.log(`   Action: Gesture "${label}" detected, but no action mapped.`);
+                    break; // No action for unmapped but recognized gestures
+            }
+
+            // --- CRITICAL STEP TO PREVENT RAPID RE-TRIGGERING ---
+            // If an action was taken based on this prediction, reset the
+            // currentPrediction state immediately. This prevents the same prediction
+            // object from triggering the action again on the next component render
+            // before a new prediction comes in.
+            if (actionTaken) {
+                 console.log(`   Resetting currentPrediction state after acting on "${label}".`);
+                 setCurrentPrediction({ label: '...', confidence: 0 });
+            }
+
+             // Cleanup timer for visual feedback when effect re-runs or component unmounts
+             return () => clearTimeout(feedbackTimer);
+        }
+
+    // Dependencies for this useEffect hook:
+    // It needs to re-run whenever these values change.
+    }, [
+        reviewActive,           // Is the review session active?
+        showAnswer,             // Is the answer currently visible?
+        currentPrediction,      // The prediction state itself (label and confidence)
+        handleResponse,         // The function to call for correct/incorrect
+        handleHint,             // The function to call for hints
+        knn,                    // The KNN model instance (to check if ready)
+        setDetectedGesture,     // State setter for visual feedback
+        setCurrentPrediction    // State setter to reset prediction after action
+    ]); // Make sure all used variables/functions from component scope are listed
 
 
     // --- Styles ---
@@ -744,6 +1194,31 @@ frameTensor = tf.browser.fromPixels(debugCanvas);
 
                     {/* VVV Add Webcam & Prediction Display VVV */}
                     <div style={{marginBottom: '15px'}}>
+
+
+                    
+                    <video
+    ref={videoRefCallback} // <<< *** THIS IS THE MOST IMPORTANT PART ***
+    autoPlay
+    playsInline
+    muted
+    style={reviewVideoStyle}
+    width="320" // Keep dimensions
+    height="240"
+    // Event handlers like onError/onStalled are good,
+    // onCanPlay is handled inside videoRefCallback in the code we wrote
+                            // Add listener for stalls or errors after playback starts
+                            onStalled={() => {
+                                console.warn("Review: Video stalled.");
+                                setIsVideoReady(false); // Consider video not ready if stalled
+                            }}
+                            onError={(e) => {
+                                console.error("Review: Video playback error:", e);
+                                setIsVideoReady(false);
+                                setWebcamError("Video playback error.");
+                            }}
+                        ></video>
+
         
                     {reviewActive && (
     <>
@@ -765,6 +1240,7 @@ frameTensor = tf.browser.fromPixels(debugCanvas);
     </>
 )}
     
+
 
                          {webcamError && <p style={{color: 'red', textAlign: 'center', fontSize: '0.9em'}}>{webcamError}</p>}
                          {gestureModelLoadState === GESTURE_MODEL_LOADED_STATE.LOADING && <p style={{textAlign: 'center', fontSize: '0.9em'}}>Loading model...</p>}
@@ -822,7 +1298,16 @@ frameTensor = tf.browser.fromPixels(debugCanvas);
                                 </>
                             ) : (
                                 <>
-                                    <button onClick={() => handleResponse('correct')} style={correctButtonStyle}>
+                                    <button
+                                        onClick={() => handleResponse('correct')}
+                                        style={{
+                                            ...correctButtonStyle,
+                                            // Add conditional styling for feedback
+                                            border: detectedGesture === 'yes' ? '3px solid yellow' : correctButtonStyle.border,
+                                            transform: detectedGesture === 'yes' ? 'scale(1.05)' : 'none',
+                                            transition: 'border 0.1s ease-out, transform 0.1s ease-out' // Smooth transition
+                                        }}
+                                    >
                                         Correct (1 / →)
                                     </button>
                                     <button onClick={() => handleResponse('hard')} style={hardButtonStyle}>

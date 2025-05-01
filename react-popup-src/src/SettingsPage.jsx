@@ -1,5 +1,5 @@
-// react-popup-src/src/SettingsPage.jsx
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+// VVV ENSURE THESE ARE PRESENT VVV
 import * as tf from '@tensorflow/tfjs';
 import * as mobilenet from '@tensorflow-models/mobilenet';
 import * as knnClassifier from '@tensorflow-models/knn-classifier';
@@ -12,7 +12,7 @@ function SettingsPage() {
     const videoRef = useRef(null);
     const [stream, setStream] = useState(null);
     const [webcamError, setWebcamError] = useState('');
-
+    const [videoReady, setVideoReady] = useState(false);
     // --- NEW: TFJS & Training State ---
     const [infoText, setInfoText] = useState('Loading models...'); // User feedback
     const [knn, setKnn] = useState(null); // KNN Classifier instance
@@ -21,6 +21,9 @@ function SettingsPage() {
     const [classExampleCounts, setClassExampleCounts] = useState({}); // e.g., {yes: 0, no: 5, hint: 10}
     const trainingIntervalRef = useRef(null); // Ref to hold setInterval ID for capturing
     const [isSavingModel, setIsSavingModel] = useState(false);
+
+    
+
 
     // --- Function to Load Models ---
     const loadModel = useCallback(async (knnInstance) => {
@@ -98,25 +101,59 @@ function SettingsPage() {
     }, [loadModel]);
 
     // --- Webcam Control Functions (Moved here) ---
-    const startWebcam = async () => {
+    const startWebcam = useCallback(async () => {
         setWebcamError('');
+        setVideoReady(false); // Reset readiness state
+    
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
             try {
-                console.log("Settings: Requesting webcam...");
-                const mediaStream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 320 }, height: { ideal: 240 } } });
-                console.log("Settings: Webcam access granted.");
+                console.log("Review: Requesting webcam...");
+                const mediaStream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        width: { ideal: 320 },
+                        height: { ideal: 240 },
+                        facingMode: 'user'
+                    }
+                });
+    
+                console.log("Review: Webcam stream obtained:", mediaStream.id);
                 setStream(mediaStream);
-                if (videoRef.current) { videoRef.current.srcObject = mediaStream; }
+    
+                // 🔥 Attach stream directly to video element here
+                if (videoRef.current) {
+                    console.log("Review: Attaching stream to videoRef.");
+                    videoRef.current.srcObject = mediaStream;
+    
+                    try {
+                        await videoRef.current.play();
+                        console.log("Review: videoRef.play() succeeded.");
+                        setVideoReady(true);
+                    } catch (e) {
+                        console.error("Review: videoRef.play() failed:", e);
+                        setWebcamError(`Playback error: ${e.message}`);
+                    }
+                } else {
+                    console.warn("Review: videoRef.current is null — DOM may not be ready.");
+                }
+    
+                return mediaStream;
             } catch (err) {
-                console.error("Settings: Error accessing webcam:", err);
-                let errMsg = "Error accessing webcam.";
-                if (err.name === "NotAllowedError") { errMsg = "Permission denied."; }
-                else if (err.name === "NotFoundError") { errMsg = "No webcam found."; }
-                else { errMsg = `Webcam Error: ${err.message}`; }
-                setWebcamError(errMsg); setStream(null);
+                console.error("Review: Webcam access error:", err);
+                let errMsg = "Webcam Error";
+                if (err.name === "NotAllowedError") errMsg = "Webcam permission denied.";
+                else if (err.name === "NotFoundError") errMsg = "No webcam found.";
+                else errMsg = `Webcam Error: ${err.message}`;
+                setWebcamError(errMsg);
+                setStream(null);
+                return null;
             }
-        } else { setWebcamError("Webcam access not supported."); setStream(null); }
-    };
+        } else {
+            setWebcamError("Webcam access not supported in this browser.");
+            setStream(null);
+            return null;
+        }
+    }, []);
+    
 
     const stopWebcam = useCallback(() => { // Make useCallback if needed elsewhere
         // Stop training interval if webcam stops
@@ -136,38 +173,55 @@ function SettingsPage() {
     // --- Cleanup webcam on component unmount ---
     useEffect(() => { return () => { stopWebcam(); }; }, [stopWebcam]);// Effect depends on stream to know if cleanup is needed
 
-    const addTrainingSample = useCallback(async (classId) => {
-        if (!mobilenetModel || !knn || !videoRef.current || videoRef.current.readyState < 3) {
-            console.warn("Models or video not ready for training sample.");
-            return; // Exit if models/video aren't ready
-        }
-         // Ensure video dimensions are available
-         if (videoRef.current.videoWidth === 0 || videoRef.current.videoHeight === 0) {
-            console.warn("Video dimensions not available yet.");
-            return;
-        }
 
-        try {
-            // Get image data from video element into a tensor
-            const img = tf.browser.fromPixels(videoRef.current);
-            // Get intermediate activation from MobileNet (the features)
-            const logits = mobilenetModel.infer(img, true);
-            // Add example to KNN classifier
-            knn.addExample(logits, classId);
-            // Update sample counts
-            setClassExampleCounts(prevCounts => ({
-                ...prevCounts,
-                [classId]: (prevCounts[classId] || 0) + 1
-            }));
-            // Dispose tensors to free memory
-            img.dispose();
-            logits.dispose();
-        } catch (error) {
-            console.error("Error adding training sample:", error);
-            setInfoText(`Error during sample capture: ${error.message}`);
-        }
+    // Inside SettingsPage.jsx
+const addTrainingSample = useCallback(async (classId) => {
+    if (!mobilenetModel || !knn || !videoRef.current || videoRef.current.readyState < 3) {
+        console.warn("Models or video not ready for training sample.");
+        return;
+    }
+    if (videoRef.current.videoWidth === 0 || videoRef.current.videoHeight === 0) {
+        console.warn("Video dimensions not available yet.");
+        return;
+    }
 
-    }, [knn, mobilenetModel]);
+    let img = null; // Declare outside try
+    let logits = null;
+
+    try {
+        // Use tf.tidy to handle the temporary 'img' tensor
+        logits = tf.tidy(() => {
+            img = tf.browser.fromPixels(videoRef.current);
+            return mobilenetModel.infer(img, true); // Return logits to keep it
+        });
+
+        // *** CRITICAL: DO NOT DISPOSE logits here ***
+        // Pass the valid logits tensor directly to addExample.
+        // The KNN library is responsible for handling this tensor internally.
+        knn.addExample(logits, classId);
+
+        // Update sample counts (this is fine)
+        setClassExampleCounts(prevCounts => ({
+            ...prevCounts,
+            [classId]: (prevCounts[classId] || 0) + 1
+        }));
+
+        // Let logits be disposed later, perhaps when the component unmounts
+        // or if explicitly cleared. For now, we let KNN manage it.
+        // If you find memory leaks LATER, you might need to manage disposal
+        // more carefully, potentially by cloning before addExample, but
+        // try this simpler approach first.
+
+    } catch (error) {
+        console.error("Error adding training sample:", error);
+        setInfoText(`Error during sample capture: ${error.message}`);
+        // Dispose tensors if an error occurred before addExample
+        if (img && !img.isDisposed) tf.dispose(img); // Should be handled by tidy
+        if (logits && !logits.isDisposed) tf.dispose(logits);
+    }
+    // No finally block needed if tidy handles intermediate tensors
+
+}, [knn, mobilenetModel, setClassExampleCounts, setInfoText]); // Add dependencies
 
     const startTraining = (classId) => {
         if (!stream || trainingIntervalRef.current) return; // Need webcam, don't start if already training
@@ -225,6 +279,8 @@ const saveModel = async () => {
          setIsSavingModel(false); // <<< UNSET SAVING FLAG (in finally)
     }
 };
+
+
 
 
     // Styles
