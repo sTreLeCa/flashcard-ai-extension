@@ -17,8 +17,33 @@ const GESTURE_CONFIDENCE_THRESHOLD = 0.85; // Confidence needed to trigger actio
 // ... other imports, constants, and component setup ...
 
 function ReviewFlashcards({ decks, setFeedback }) {
-
-    // ... state variables ...
+    // State declarations would go here
+    const [isLoadingCards, setIsLoadingCards] = useState(false);
+    const [stream, setStream] = useState(null);
+    const [videoElement, setVideoElement] = useState(null);
+    const [isVideoReady, setIsVideoReady] = useState(false);
+    const [webcamError, setWebcamError] = useState('');
+    const [selectedDeckId, setSelectedDeckId] = useState('');
+    const [deckCards, setDeckCards] = useState([]);
+    const [currentCardIndex, setCurrentCardIndex] = useState(0);
+    const [showAnswer, setShowAnswer] = useState(false);
+    const [reviewActive, setReviewActive] = useState(false);
+    const [reviewComplete, setReviewComplete] = useState(false);
+    const [stats, setStats] = useState({ correct: 0, incorrect: 0, hard: 0, total: 0 });
+    const [feedbackAnimation, setFeedbackAnimation] = useState(null);
+    const [hintUsed, setHintUsed] = useState(false);
+    const [hintText, setHintText] = useState('');
+    const [showImageHint, setShowImageHint] = useState(false);
+    const [currentPrediction, setCurrentPrediction] = useState({ label: '...', confidence: 0 });
+    const [detectedGesture, setDetectedGesture] = useState(null);
+    const [sessionLimit, setSessionLimit] = useState(20);
+    const [knn, setKnn] = useState(null);
+    const [mobilenetModel, setMobilenetModel] = useState(null);
+    const [gestureModelLoadState, setGestureModelLoadState] = useState(GESTURE_MODEL_LOADED_STATE.IDLE);
+    
+    // Refs
+    const videoRef = useRef(null);
+    const predictionIntervalRef = useRef(null);
 
     // --- Fetch cards for the selected deck (USING nextReviewDate) ---
     const fetchCardsForDeck = useCallback(async (deckId) => {
@@ -132,8 +157,11 @@ function ReviewFlashcards({ decks, setFeedback }) {
     // Dependencies: sessionLimit triggers refetch if changed, setFeedback is used.
     // setIsLoadingCards, setDeckCards etc. are state setters, generally not needed as deps.
     }, [sessionLimit, setFeedback]);
-
-   
+    
+    // You would need to define loadModelsAndData function
+    const loadModelsAndData = useCallback(async () => {
+        // Implementation would go here
+    }, []);
 
     useEffect(() => {
         loadModelsAndData();
@@ -200,11 +228,6 @@ function ReviewFlashcards({ decks, setFeedback }) {
             videoElement.srcObject = null;
         }
     }, [stream, videoElement]);
-
-
-    // --- Fetch cards for the selected deck (USING nextReviewDate) ---
-    
-
 
     // --- Start Review Session ---
     const handleStartReview = async () => {
@@ -402,9 +425,14 @@ function ReviewFlashcards({ decks, setFeedback }) {
                                 };
                             }; // --- END of NEW getRequest.onsuccess logic ---
                         }); // End await new Promise
-                        // ... rest of handleResponse (moveToNextCard call) ...
+                        
+                        // Move to next card after update
+                        moveToNextCard();
                     } catch (err) {
-                        // ... existing catch block ...
+                        console.error("Error in handleResponse:", err);
+                        setFeedback(`Error: ${err.message}`);
+                        // Still move to next card to prevent getting stuck
+                        moveToNextCard();
                     }
                 };
 
@@ -506,24 +534,19 @@ function ReviewFlashcards({ decks, setFeedback }) {
 
 
     // --- Styles ---
-    const containerStyle = { padding: '15px' };
-    const sectionStyle = { padding: '15px', border: '1px solid #eee', borderRadius: '4px', marginBottom: '15px' };
-    const controlsStyle = { marginTop: '20px', display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: '10px' };
-    const buttonStyle = { padding: '8px 15px', borderRadius: '4px', cursor: 'pointer', border: '1px solid #ccc' };
-    const correctButtonStyle = { ...buttonStyle, backgroundColor: '#4caf50', color: 'white', borderColor: '#388e3c' };
-    const hardButtonStyle = { ...buttonStyle, backgroundColor: '#ff9800', color: 'white', borderColor: '#f57c00' };
-    const incorrectButtonStyle = { ...buttonStyle, backgroundColor: '#f44336', color: 'white', borderColor: '#d32f2f' };
-    const hintButtonStyle = {...buttonStyle, backgroundColor: '#2196f3', color: 'white', borderColor: '#1976d2'};
-    const showAnswerButtonStyle = {...buttonStyle, backgroundColor: '#673ab7', color: 'white', borderColor: '#512da8'};
-    const statsStyle = { marginTop: '20px', padding: '10px', backgroundColor: '#f0f0f0', borderRadius: '4px', textAlign: 'center', border: '1px solid #ddd' };
-    const keyboardHintStyle = { fontSize: '0.8em', color: '#666', textAlign: 'center', marginTop: '15px', lineHeight: '1.4' };
-    const hintTextStyle = { padding: '10px', backgroundColor: '#e3f2fd', border: '1px dashed #90caf9', borderRadius: '4px', marginTop: '15px', fontFamily: 'monospace', fontSize: '1.1em', textAlign: 'center' };
-    const getCardStyle = () => { /* ... dynamic style based on feedbackAnimation ... */
-        const baseStyle = { border: '1px solid #ddd', padding: '20px', borderRadius: '8px', marginTop: '15px', backgroundColor: '#f9f9f9', minHeight: '150px', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', textAlign: 'center', transition: 'background-color 0.3s ease, border-color 0.3s ease', overflowWrap: 'break-word', width: '100%', boxSizing: 'border-box' };
-        switch (feedbackAnimation) { case 'correct': return { ...baseStyle, backgroundColor: '#e8f5e9', borderColor: '#a5d6a7' }; case 'hard': return { ...baseStyle, backgroundColor: '#fff3e0', borderColor: '#ffcc80' }; case 'incorrect': return { ...baseStyle, backgroundColor: '#ffebee', borderColor: '#ef9a9a' }; default: return baseStyle; }
-    };
-    const reviewVideoStyle = { width: '80%', maxWidth: '200px', border: '1px solid #ccc', display: 'block', margin: '10px auto', backgroundColor: '#333' };
-    const predictionStyle = { fontSize: '0.9em', textAlign: 'center', marginTop: '5px', color: '#333', minHeight: '1.2em' };
+   // --- Styles ---
+   const containerStyle = { padding: '15px' };
+   const sectionStyle = { padding: '15px', border: '1px solid #eee', borderRadius: '4px', marginBottom: '15px' };
+   const controlsStyle = { marginTop: '20px', display: 'flex', justifyContent: 'center', flexWrap: 'wrap', gap: '10px' };
+   const buttonStyle = { padding: '8px 15px', borderRadius: '4px', cursor: 'pointer', border: '1px solid #ccc' };
+   const correctButtonStyle = { ...buttonStyle, backgroundColor: '#4caf50', color: 'white', borderColor: '#388e3c' };
+   const hardButtonStyle = { ...buttonStyle, backgroundColor: '#ff9800', color: 'white', borderColor: '#f57c00' };
+   const incorrectButtonStyle = { ...buttonStyle, backgroundColor: '#f44336', color: 'white', borderColor: '#d32f2f' };
+   const hintButtonStyle = {...buttonStyle, backgroundColor: '#2196f3', color: 'white', borderColor: '#1976d2'};
+   const showAnswerButtonStyle = {...buttonStyle, backgroundColor: '#673ab7', color: 'white', borderColor: '#512da8'};
+   const statsStyle = { marginTop: '20px', padding: '10px', backgroundColor: '#f0f0f0', borderRadius: '4px', border: '1px solid #ddd' };
+   const keyboardHintStyle = { fontSize: '0.8em', color: '#666', textAlign: 'center', marginTop: '15px', lineHeight: '1.4' };
+   const hintTextStyle = { padding: '10px', backgroundColor: '#e3f2fd', border: '1px dashed #90caf9', borderRadius: '4px', marginTop: '15px', fontFamily: 'monospace', fontSize: '1.1em', textAlign: 'center' };
 
 
     // --- Render Logic ---
@@ -1189,235 +1212,9 @@ useEffect(() => {
      // --- Move to the next card or end review ---
      // Constants
 
-function ReviewFlashcards({ decks, setFeedback }) {
-
-    // --- State Variables ---
-    const [selectedDeckId, setSelectedDeckId] = useState('');
-    const [deckCards, setDeckCards] = useState([]);
-    const [isLoadingCards, setIsLoadingCards] = useState(false);
-    const [currentCardIndex, setCurrentCardIndex] = useState(0);
-    const [showAnswer, setShowAnswer] = useState(false);
-    const [reviewActive, setReviewActive] = useState(false);
-    const [reviewComplete, setReviewComplete] = useState(false);
-    const [stats, setStats] = useState({ correct: 0, incorrect: 0, hard: 0, total: 0 });
-    const [sessionLimit, setSessionLimit] = useState(20);
-    const [feedbackAnimation, setFeedbackAnimation] = useState(null);
-    const [hintUsed, setHintUsed] = useState(false);
-    const [hintText, setHintText] = useState('');
-    const [showImageHint, setShowImageHint] = useState(false); // State for image hint
-    const [isVideoReady, setIsVideoReady] = useState(false);
-    const [videoElement, setVideoElement] = useState(null);
-    const videoRef = useRef(null);
-    const [stream, setStream] = useState(null);
-    const [webcamError, setWebcamError] = useState('');
-    const [knn, setKnn] = useState(null);
-    const [mobilenetModel, setMobilenetModel] = useState(null);
-    const [gestureModelLoadState, setGestureModelLoadState] = useState(GESTURE_MODEL_LOADED_STATE.IDLE);
-    const [loadedClassCounts, setLoadedClassCounts] = useState({});
-    const predictionIntervalRef = useRef(null);
-    const [currentPrediction, setCurrentPrediction] = useState({ label: '...', confidence: 0 });
-    const [detectedGesture, setDetectedGesture] = useState(null);
-    // --- End State Variables ---
 
 
-    // --- Load Models (MobileNet & KNN Data) ---
-    const loadModelsAndData = useCallback(async () => {
-        // ... (function logic as before) ...
-         if (gestureModelLoadState !== GESTURE_MODEL_LOADED_STATE.IDLE) return;
-         setGestureModelLoadState(GESTURE_MODEL_LOADED_STATE.LOADING); /* ... */
-         try { /* ... */ } catch (error) { /* ... */ }
-    }, [gestureModelLoadState, setFeedback]);
-
-    useEffect(() => { loadModelsAndData(); }, [loadModelsAndData]);
-
-
-    // --- Webcam Control Functions ---
-    const startWebcam = useCallback(async () => { /* ... logic ... */ }, []);
-    const stopWebcam = useCallback(() => { /* ... logic ... */ }, [stream]);
-    useEffect(() => { return () => { stopWebcam(); }; }, [stopWebcam]);
-
-
-    // --- Video Element Handling ---
-     const videoRefCallback = useCallback((node) => { /* ... logic ... */ }, [stream]);
-    useEffect(() => { /* ... logic to attach stream ... */ }, [stream, videoElement]);
-
-
-    // --- Fetch cards for the selected deck (USING nextReviewDate) ---
-    const fetchCardsForDeck = useCallback(async (deckId) => { /* ... logic ... */ }, [sessionLimit, setFeedback]);
-
-
-    // --- Start Review Session ---
-    const handleStartReview = async () => { /* ... logic ... */ };
-
-
-    // --- Prediction Loop ---
-    const runPrediction = useCallback(async () => { /* ... logic ... */ }, [/* dependencies */]);
-    useEffect(() => { /* ... logic to start/stop interval ... */ }, [/* dependencies */]);
-
-
-    // --- Generate Text Hint ---
-    const generateHint = (answerText) => { /* ... logic ... */ };
-
-
-    // --- Handle Hint Request (UPDATED for Image) ---
-    const handleHint = () => { /* ... logic as updated previously ... */ };
-
-
-    // --- Handle User Response (UPDATED with SRS Logic) ---
-    const handleResponse = async (rating) => { /* ... logic as updated previously ... */ };
-
-
-    // --- Move to Next Card (CORRECT Version - Includes Image Hint Reset) ---
-    const moveToNextCard = () => {
-        const nextIndex = currentCardIndex + 1;
-        if (nextIndex >= deckCards.length) {
-            console.log("Review complete. No more cards in this session.");
-            setReviewComplete(true);
-            setReviewActive(false); // Stop webcam/prediction
-            setFeedback('Review session completed!');
-        } else {
-            console.log(`Moving to card index ${nextIndex}`);
-            setCurrentCardIndex(nextIndex);
-            setShowAnswer(false);
-            setHintUsed(false);
-            setHintText('');
-            setShowImageHint(false); // <<< RESET IMAGE HINT (This is the correct place)
-        }
-        setFeedbackAnimation(null); // Reset visual feedback flash
-    };
-    // --- END CORRECT moveToNextCard ---
-
-
-    // --- Reset Review State (CORRECT Version - Includes Image Hint Reset) ---
-    const handleResetReview = () => {
-        console.log("ReviewFlashcards: Resetting review.");
-        stopWebcam(); // Stop webcam and prediction
-        setDeckCards([]);
-        setCurrentCardIndex(0);
-        setShowAnswer(false);
-        setReviewActive(false);
-        setReviewComplete(false);
-        setStats({ correct: 0, incorrect: 0, hard: 0, total: 0 });
-        setFeedback('');
-        setFeedbackAnimation(null);
-        setHintUsed(false);
-        setHintText('');
-        setShowImageHint(false); // <<< RESET IMAGE HINT (This is the correct place)
-        setIsLoadingCards(false);
-        setSelectedDeckId(''); // Optionally reset deck selection
-    };
-    // --- END CORRECT handleResetReview ---
-
-
-    // --- Keyboard Shortcuts ---
-    useEffect(() => { /* ... logic ... */ }, [/* dependencies */]);
-
-
-    // --- Gesture Handling ---
-    useEffect(() => { /* ... logic for yes/no gestures ... */ }, [/* dependencies */]);
-    useEffect(() => { /* ... logic for hint gesture ... */ }, [/* dependencies */]);
-
-
-    // --- Styles ---
-    // ... (All style objects as before) ...
-    const containerStyle = { /*...*/ }; const sectionStyle = { /*...*/ };
-    const controlsStyle = { /*...*/ }; const buttonStyle = { /*...*/ };
-    const correctButtonStyle = { /*...*/ }; const hardButtonStyle = { /*...*/ };
-    const incorrectButtonStyle = { /*...*/ }; const hintButtonStyle = { /*...*/ };
-    const showAnswerButtonStyle = { /*...*/ }; const statsStyle = { /*...*/ };
-    const keyboardHintStyle = { /*...*/ }; const hintTextStyle = { /*...*/ };
-    const getCardStyle = () => { /*...*/ }; const reviewVideoStyle = { /*...*/ };
-    const predictionStyle = { /*...*/ };
-
-
-    // --- Render Logic ---
-    return (
-        <div style={containerStyle}>
-            <h3>Review Flashcards</h3>
-
-             {/* Deck Selection & Setup */}
-             {!reviewActive && !reviewComplete && (
-                 <div style={sectionStyle}>
-                     {/* ... select deck and session limit inputs ... */}
-                 </div>
-            )}
-
-            {/* Review Session Active */}
-            {reviewActive && !isLoadingCards && deckCards.length > 0 && currentCardIndex < deckCards.length && (
-                <div style={sectionStyle}>
-                    <h4>Card {currentCardIndex + 1} of {deckCards.length}</h4>
-
-                    {/* Webcam & Prediction Display */}
-                    <div style={{marginBottom: '15px'}}>
-                        {/* ... video and prediction elements ... */}
-                    </div>
-
-                    {/* Card Display */}
-                    <div style={getCardStyle()}>
-                        {/* Front */}
-                        <div style={{ marginBottom: showAnswer ? '20px' : '0' }}>
-                             {/* ... */}
-                             <p style={{ fontSize: '1.2em', fontWeight: 'bold', margin: 0 }}>{deckCards[currentCardIndex].front}</p>
-                        </div>
-
-                         {/* --- UPDATED: Hint Display Area --- */}
-                         {showImageHint && !showAnswer && deckCards[currentCardIndex]?.hintImageUrl && (
-                             <div style={{ marginTop: '15px', borderTop: '1px dashed #ccc', paddingTop: '15px', textAlign: 'center' }}>
-                                 <h5 style={{ marginTop: 0, marginBottom: '5px', color: '#555' }}>Image Hint:</h5>
-                                 <img src={deckCards[currentCardIndex].hintImageUrl} alt="Hint" style={{ maxWidth: '90%', maxHeight: '150px', display: 'block', margin: '5px auto', border: '1px solid #eee', objectFit: 'contain' }} onError={(e) => { e.target.style.display = 'none'; console.warn("Hint image failed to load:", e.target.src); }} />
-                             </div>
-                         )}
-                         {hintText && !showImageHint && !showAnswer && (
-                             <div style={hintTextStyle}>
-                                 <p style={{margin: 0}}><strong>Hint:</strong> {hintText}</p>
-                             </div>
-                         )}
-                         {/* --------------------------------- */}
-
-
-                        {/* Answer (Conditional) */}
-                        {showAnswer && (
-                            <div style={{ borderTop: '1px dashed #ccc', paddingTop: '20px', width: '100%' }}>
-                                {/* ... answer and notes ... */}
-                            </div>
-                        )}
-                    </div>
-
-                     {/* Controls */}
-                     <div style={controlsStyle}>
-                         {/* ... buttons ... */}
-                     </div>
-
-                     {/* --- UPDATED: Progress Info --- */}
-                     <div style={{ marginTop: '15px', textAlign: 'center', fontSize: '0.9em', color: '#555' }}>
-                         {deckCards[currentCardIndex] && (
-                             <p style={{ margin: '0 0 5px 0' }}>
-                                 Next Review: {deckCards[currentCardIndex].nextReviewDate ? new Date(deckCards[currentCardIndex].nextReviewDate).toLocaleDateString() : 'N/A'}
-                                  | Ease: {deckCards[currentCardIndex].easeFactor?.toFixed(1) ?? 'N/A'}
-                                  {hintUsed && <span style={{color: 'orange', fontWeight: 'bold'}}> (Hint Used)</span>}
-                             </p>
-                         )}
-                         {/* Progress Bar */}
-                         <div style={{ backgroundColor: '#ddd', height: '10px', borderRadius: '5px', overflow: 'hidden', marginTop: '5px' }}>
-                             <div style={{ width: `${((currentCardIndex + 1) / deckCards.length) * 100}%`, height: '100%', backgroundColor: '#2196f3', transition: 'width 0.3s ease' }}></div>
-                         </div>
-                     </div>
-                     <div style={keyboardHintStyle}>
-                        {/* ... */}
-                     </div>
-                </div>
-            )}
-
-             {/* Review Complete Summary */}
-             {reviewComplete && (
-                 <div style={sectionStyle}>
-                    {/* ... stats and reset button ... */}
-                 </div>
-             )}
-        </div>
-    );
-
-} // <<< END OF COMPONENT FUNCTION
+ // <<< END OF COMPONENT FUNCTION
     useEffect(() => {
         console.log("🔍 Render cycle - videoRef.current is:", videoRef.current);
       });
