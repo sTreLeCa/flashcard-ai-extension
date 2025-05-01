@@ -1,96 +1,165 @@
-// db.js
-import * as tf from '@tensorflow/tfjs';
+// react-popup-src/src/db.js
+import * as tf from '@tensorflow/tfjs'; // Keep TFJS imports if needed elsewhere in db.js
 
+// --- Constants ---
 export const DB_NAME = 'flashcardDB';
-export const DB_VERSION = 4;
+export const DB_VERSION = 4; // Ensure this is the latest version needed
 export const STORE_NAME = 'flashcards';
 export const DECKS_STORE_NAME = 'decks';
-export const GESTURE_MODEL_STORE_NAME = 'gestureModel';
-export const UNASSIGNED_DECK_ID = 0;
+export const GESTURE_MODEL_STORE_NAME = 'gestureModel'; // Added for V4
+export const UNASSIGNED_DECK_ID = null; // Use null for clarity, or keep 0 if preferred
 
-let dbInstance = null; // Hold the actual DB connection instance
-let openingPromise = null
+// --- Singleton Connection Management ---
+let dbInstance = null; // Holds the active DB connection
+let openingPromise = null; // Holds the promise during the opening process
+
 /**
- * Opens and initializes the IndexedDB database.
- * Returns a Promise that resolves with the database instance when ready.
- * @returns {Promise<IDBDatabase>}
+ * Opens and initializes the IndexedDB database using a singleton pattern.
+ * Ensures only one connection attempt happens at a time and reuses existing connections.
+ * Handles version upgrades.
+ * @returns {Promise<IDBDatabase>} A promise that resolves with the database instance.
  */
-
 export function openDB() {
-    // If we already have a valid, open connection, return it directly
-    if (dbInstance && dbInstance.objectStoreNames.length > 0) { // Basic check if connection seems valid
+    // 1. Check if a valid, open connection already exists
+    if (dbInstance && dbInstance.objectStoreNames.length > 0) {
         console.log(`DB Util: Reusing existing DB instance (v${dbInstance.version}).`);
         return Promise.resolve(dbInstance);
     }
 
-    // If an opening operation is already in progress, return its promise
+    // 2. Check if an opening operation is already in progress
     if (openingPromise) {
-        console.log(`DB Util: Reusing existing opening promise.`);
+        console.log("DB Util: Reusing existing opening promise.");
         return openingPromise;
     }
 
-    console.log(`DB Util: Starting new DB open request for v${DB_VERSION}...`);
+    // 3. Start a new opening process
+    console.log(`DB Util: Starting new DB open request for '${DB_NAME}' v${DB_VERSION}...`);
     openingPromise = new Promise((resolve, reject) => {
-        console.log(`DB Util: Inside new Promise constructor.`); // <<< LOG
+
         if (typeof indexedDB === 'undefined') {
             console.error("DB Util: IndexedDB not supported.");
             openingPromise = null; // Reset promise state
-            return reject(new Error("IndexedDB not supported"));
+            return reject(new Error("IndexedDB is not supported by this browser."));
         }
 
         const request = indexedDB.open(DB_NAME, DB_VERSION);
-        console.log(`DB Util: indexedDB.open called.`); // <<< LOG
+        console.log("DB Util: indexedDB.open called.");
 
+        // --- Upgrade Handler (Critical) ---
         request.onupgradeneeded = (event) => {
-            // ... (Keep your full V1, V2, V3, V4 upgrade logic here) ...
-            console.log(`DB Util: onupgradeneeded event fired (Old: ${event.oldVersion}, New: ${event.newVersion}).`);
-            // ... schema changes ...
-            console.log(`DB Util: onupgradeneeded finished processing.`);
+            const db = event.target.result;
+            const transaction = event.target.transaction; // Use this transaction for upgrades
+            const oldVersion = event.oldVersion;
+            const newVersion = event.newVersion;
+            console.log(`DB Util: Upgrading database from version ${oldVersion} to ${newVersion}...`);
+
+            try {
+                // Version 1: Create 'flashcards' store
+                if (oldVersion < 1 && !db.objectStoreNames.contains(STORE_NAME)) {
+                    console.log(`DB Util: Creating object store: ${STORE_NAME}`);
+                    db.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });
+                }
+
+                // Version 2: Create 'decks' store and index on 'flashcards'
+                if (oldVersion < 2) {
+                    if (!db.objectStoreNames.contains(DECKS_STORE_NAME)) {
+                        console.log(`DB Util: Creating object store: ${DECKS_STORE_NAME}`);
+                        db.createObjectStore(DECKS_STORE_NAME, { keyPath: 'id', autoIncrement: true });
+                    }
+                    // Add index ONLY if the flashcards store exists in this transaction
+                    if (transaction && transaction.objectStoreNames.contains(STORE_NAME)) {
+                         const flashcardStore = transaction.objectStore(STORE_NAME);
+                         if (!flashcardStore.indexNames.contains('deckIdIndex')) {
+                             console.log(`DB Util: Creating index 'deckIdIndex' on store: ${STORE_NAME}`);
+                             flashcardStore.createIndex('deckIdIndex', 'deckId', { unique: false });
+                         }
+                    } else {
+                         console.warn(`DB Util: Cannot add index 'deckIdIndex' as '${STORE_NAME}' store not available in upgrade transaction from v${oldVersion}.`);
+                    }
+                }
+
+                // Version 3: (Placeholder for future changes if needed)
+                // if (oldVersion < 3) {
+                //    console.log("DB Util: Applying V3 changes...");
+                // }
+
+                // Version 4: Create 'gestureModel' store
+                if (oldVersion < 4 && !db.objectStoreNames.contains(GESTURE_MODEL_STORE_NAME)) {
+                    console.log(`DB Util: Creating object store: ${GESTURE_MODEL_STORE_NAME}`);
+                    // Use a keyPath 'id'. We will always use id=1 for the single model entry.
+                    db.createObjectStore(GESTURE_MODEL_STORE_NAME, { keyPath: 'id' });
+                }
+
+                console.log("DB Util: Database upgrade steps completed.");
+
+            } catch (upgradeError) {
+                 console.error("DB Util: Error during database upgrade:", upgradeError);
+                 // Make sure the transaction aborts if upgrade fails
+                 if (transaction && typeof transaction.abort === 'function') {
+                     transaction.abort();
+                 }
+                 // Reject the main promise if upgrade fails critically
+                 // Note: This might prevent onsuccess from firing, which could be intended.
+                 // reject(upgradeError); // Consider if rejecting here is desired. Often letting onerror handle it is fine.
+            }
         };
 
+        // --- Success Handler ---
         request.onsuccess = (event) => {
-            console.log("DB Util: request.onsuccess fired."); // <<< LOG
-            dbInstance = event.target.result; // Store the successful connection
+            console.log("DB Util: request.onsuccess fired.");
+            dbInstance = event.target.result; // Store the connection
             console.log(`DB Util: DB "${DB_NAME}" connection established (v${dbInstance.version}).`);
-            dbInstance.onversionchange = () => { // Handle external version change requests
+
+            // Generic handlers for the active connection
+            dbInstance.onversionchange = () => {
                  console.warn("DB Util: Database version change requested elsewhere. Closing connection.");
-                 dbInstance?.close();
+                 if(dbInstance && typeof dbInstance.close === 'function') {
+                     dbInstance.close();
+                 }
                  dbInstance = null;
-                 openingPromise = null;
+                 openingPromise = null; // Allow reopening
+                 // Optionally: Notify the user to reload
             };
             dbInstance.onclose = () => {
-                 console.warn('DB Util: DB connection closed.');
+                 console.warn('DB Util: DB connection closed unexpectedly.');
                  dbInstance = null;
                  openingPromise = null; // Allow reopening
             };
-            dbInstance.onerror = (errEvent) => { // Generic handler on the connection
+            dbInstance.onerror = (errEvent) => { // Generic error on the connection itself
                  console.error("DB Util: Generic DB connection error:", errEvent.target.error);
-                 // Don't necessarily nullify dbPromise here, maybe connection is still partially usable? Depends.
+                 // Don't nullify openingPromise here unless connection is truly unusable
             };
-            openingPromise = null; // Clear the opening promise now we have an instance
-            resolve(dbInstance); // Resolve with the DB instance
-            console.log("DB Util: resolve(dbInstance) called."); // <<< LOG
+
+            openingPromise = null; // Clear the promise *after* setting dbInstance
+            resolve(dbInstance); // Resolve the main promise with the connection
+            console.log("DB Util: openDB promise resolved.");
         };
 
+        // --- Error Handler ---
         request.onerror = (event) => {
-            console.error("DB Util: request.onerror fired:", event.target.error); // <<< LOG
+            console.error("DB Util: request.onerror fired:", event.target.error);
             openingPromise = null; // Reset promise state on error
-            reject(event.target.error); // Reject the promise
-            console.log("DB Util: reject(error) called from onerror."); // <<< LOG
+            reject(event.target.error); // Reject the main promise
+            console.log("DB Util: openDB promise rejected from onerror.");
         };
 
+        // --- Blocked Handler ---
         request.onblocked = (event) => {
-            // This implies an upgrade is needed but blocked by another connection
-            console.warn("DB Util: request.onblocked fired. Close other tabs/windows using this extension.", event); // <<< LOG
+            console.warn("DB Util: request.onblocked fired. Another tab might have an older version open.", event);
             openingPromise = null; // Reset promise state
-            reject(new Error(`Database open blocked (v${DB_VERSION}). Close other tabs.`)); // Reject the promise
-             console.log("DB Util: reject(error) called from onblocked."); // <<< LOG
-       };
-        console.log("DB Util: Event listeners attached to request."); // <<< LOG
+            // Provide a more user-friendly error message
+            reject(new Error(`Database open blocked (v${DB_VERSION}). Please close other tabs/windows using this extension and try again.`));
+            console.log("DB Util: openDB promise rejected from onblocked.");
+        };
+
+        console.log("DB Util: Event listeners attached to request.");
     });
 
     return openingPromise;
 }
+
+
+// --- Gesture Model Save/Load Functions (Keep these as they are, assuming they use openDB correctly) ---
 
 /**
  * Saves the KNN classifier dataset and class counts to IndexedDB.
@@ -112,17 +181,21 @@ export async function saveGestureModel(knnClassifierInstance, classExampleCounts
     let processingError = false;
 
     // Step 2: Extract data and shape from tensors *before* disposing
+    // NOTE: tf.tidy() might be a cleaner way to handle disposal here,
+    // but this manual approach is also valid if done carefully.
     for (const classIndex in dataset) {
         const dataTensor = dataset[classIndex];
         if (dataTensor) {
             try {
+                // IMPORTANT: Ensure data is copied synchronously before disposal
                 const dataAsArray = Array.from(dataTensor.dataSync());
                 serializableDataset[classIndex] = { data: dataAsArray, shape: dataTensor.shape };
-                tensorsToDispose.push(dataTensor);
+                tensorsToDispose.push(dataTensor); // Add to list for later disposal
             } catch (e) {
                 console.error(`DB Util: Error processing tensor for class ${classIndex}`, e);
                 processingError = true;
-                tensorsToDispose.forEach(t => t.dispose()); // Dispose already collected tensors
+                // Clean up any tensors already collected if processing fails mid-way
+                tensorsToDispose.forEach(t => { if (t && !t.isDisposed) t.dispose(); });
                 throw new Error(`Failed to process tensor for class ${classIndex}: ${e.message}`);
             }
         } else {
@@ -130,9 +203,11 @@ export async function saveGestureModel(knnClassifierInstance, classExampleCounts
         }
     }
 
-    // Step 3: Dispose all original tensors
-    tensorsToDispose.forEach(t => t.dispose());
+    // Step 3: Dispose all original tensors *after* data extraction is complete
+    console.log(`DB Util: Disposing ${tensorsToDispose.length} original tensors after data extraction.`);
+    tensorsToDispose.forEach(t => { if (t && !t.isDisposed) t.dispose(); });
     console.log("DB Util: Original tensors disposed.");
+
 
     // Step 4: Check if we actually got any data or if processing failed
     if (Object.keys(serializableDataset).length === 0 || processingError) {
@@ -140,52 +215,44 @@ export async function saveGestureModel(knnClassifierInstance, classExampleCounts
          throw new Error("Failed to serialize training data or processing error.");
     }
 
-    // Step 5: Prepare data for IndexedDB
-    // VVV UNCOMMENT THIS LINE VVV
+    // Step 5: Prepare data for IndexedDB (Use ID 1 for the single model entry)
     const modelDataToSave = { id: 1, dataset: serializableDataset, classCounts: classExampleCounts };
-    // VVV Log the actual data being prepared VVV
-    console.log("DB Util: Data prepared for saving:", JSON.stringify(modelDataToSave).substring(0, 300) + "...");
+    console.log("DB Util: Data prepared for saving:", JSON.stringify(modelDataToSave).substring(0, 300) + "..."); // Log snippet
 
-    // Step 6: Save to IndexedDB
+    // Step 6: Save to IndexedDB using the master openDB
     console.log("DB Util: Attempting transaction to save gesture model...");
     try {
-        const db = await openDB(); // Call the exported openDB function
+        const db = await openDB(); // <<< USE THE EXPORTED FUNCTION
         const transaction = db.transaction(GESTURE_MODEL_STORE_NAME, 'readwrite');
-        console.log("DB Util: Transaction obtained."); // <<< LOG
+        console.log("DB Util: Save model transaction obtained.");
 
         // Add detailed transaction handlers
-        transaction.oncomplete = () => { 
-            console.log("DB Util: Save model transaction COMPLETED SUCCESSFULLY."); 
-        };
-        transaction.onerror = (e) => { 
-            console.error("DB Util: Save model TRANSACTION ERROR:", e.target.error); 
-        }; // Don't reject promise here, let putRequest handle it
-        transaction.onabort = (e) => { 
-            console.warn("DB Util: Save model TRANSACTION ABORTED:", e.target.error); 
-        }; // Don't reject promise here
-
+        transaction.oncomplete = () => console.log("DB Util: Save model transaction COMPLETED.");
+        transaction.onerror = (e) => console.error("DB Util: Save model TRANSACTION ERROR:", e.target.error);
+        transaction.onabort = (e) => console.warn("DB Util: Save model TRANSACTION ABORTED:", e.target.error);
 
         const store = transaction.objectStore(GESTURE_MODEL_STORE_NAME);
         console.log("DB Util: Store obtained, executing put request...");
         const putRequest = store.put(modelDataToSave);
 
-        return new Promise((resolve, reject) => { // Return promise wrapping the request
-             console.log("DB Util: Promise for putRequest created."); // <<< LOG
+        return new Promise((resolve, reject) => { // Wrap the request in a promise
+             console.log("DB Util: Promise for putRequest created.");
             putRequest.onsuccess = () => {
-                 console.log("DB Util: putRequest succeeded. Model saved."); // <<< LOG
+                 console.log("DB Util: putRequest succeeded. Model saved.");
                  resolve(); // Resolve on successful put
             };
             putRequest.onerror = (e) => {
-                 console.error("DB Util: putRequest failed:", e.target.error); // <<< LOG
-                 reject(e.target.error);
+                 console.error("DB Util: putRequest failed:", e.target.error);
+                 reject(new Error(`Failed to save model data: ${e.target.error?.message}`)); // Reject with specific error
             };
-            // Note: Transaction handlers defined outside promise are still active
         });
     } catch (err) {
          console.error("DB Util: DB Error during save model setup/execution:", err);
-         throw new Error(`DB Error saving model: ${err.message}`); // Re-throw error
+         // Propagate the error (could be DB open error or transaction error)
+         throw new Error(`DB Error saving model: ${err.message}`);
     }
 }
+
 
 /**
  * Loads the KNN classifier dataset from IndexedDB and configures the provided KNN instance.
@@ -193,141 +260,105 @@ export async function saveGestureModel(knnClassifierInstance, classExampleCounts
  * @returns {Promise<object>} A promise resolving with the loaded class counts object, or empty object if no data found/error.
  */
 export async function loadGestureModel(knnClassifierInstance) {
-    // Check if a valid KNN instance was provided
-    if (!knnClassifierInstance || typeof knnClassifierInstance.setClassifierDataset !== 'function') {
-        console.error("DB Util: Invalid or missing KNN instance provided to loadGestureModel.");
-        return {}; // Return empty counts if no valid KNN instance
-    }
+     if (!knnClassifierInstance || typeof knnClassifierInstance.setClassifierDataset !== 'function') {
+         console.error("DB Util: Invalid or missing KNN instance provided to loadGestureModel.");
+         return {}; // Return empty counts
+     }
+     console.log("DB Util: Attempting to load gesture model...");
 
-    console.log("DB Util: Attempting to load gesture model...");
+     try {
+         const db = await openDB(); // <<< USE THE EXPORTED FUNCTION
 
-    try {
-        // Get a connection to the IndexedDB database
-        const db = await openDB();
+         if (!db.objectStoreNames.contains(GESTURE_MODEL_STORE_NAME)) {
+             console.log(`DB Util: Object store "${GESTURE_MODEL_STORE_NAME}" doesn't exist. No model to load.`);
+             return {}; // No store, no data
+         }
 
-        // Check if the required object store exists
-        if (!db.objectStoreNames.contains(GESTURE_MODEL_STORE_NAME)) {
-            console.log(`DB Util: Object store "${GESTURE_MODEL_STORE_NAME}" doesn't exist yet. No model to load.`);
-            return {}; // Return empty counts if the store isn't there
-        }
+         const transaction = db.transaction(GESTURE_MODEL_STORE_NAME, 'readonly');
+         const store = transaction.objectStore(GESTURE_MODEL_STORE_NAME);
+         console.log("DB Util: Requesting saved model data with key 1...");
+         const getRequest = store.get(1); // Get the single model entry with ID 1
 
-        // Start a read-only transaction on the gesture model store
-        const transaction = db.transaction(GESTURE_MODEL_STORE_NAME, 'readonly');
-        const store = transaction.objectStore(GESTURE_MODEL_STORE_NAME);
+         return new Promise((resolve, reject) => {
+             console.log("DB Util: Promise created for getRequest.");
 
-        console.log("DB Util: Requesting saved model data with key 1...");
-        // Request the saved model data (assuming it's stored with a fixed key, e.g., 1)
-        const getRequest = store.get(1);
+             getRequest.onsuccess = () => {
+                 console.log("DB Util: getRequest succeeded.");
+                 const savedData = getRequest.result;
 
-        // Return a Promise that resolves/rejects based on the IndexedDB request outcome
-        return new Promise((resolve, reject) => {
-            console.log("DB Util: Promise created for getRequest.");
+                 if (savedData?.dataset && typeof savedData.dataset === 'object' && Object.keys(savedData.dataset).length > 0) {
+                     console.log("DB Util: Found saved model data, processing entries...");
+                     const tensorsToSet = {};
+                     let processingSuccessful = true;
 
-            // Handle successful retrieval of data
-            getRequest.onsuccess = () => {
-                console.log("DB Util: getRequest succeeded.");
-                const savedData = getRequest.result;
+                    // Wrap tensor creation/cloning in tf.tidy for automatic cleanup of intermediates
+                    tf.tidy(() => {
+                        Object.entries(savedData.dataset).forEach(([classIndex, dataObj]) => {
+                            if (!processingSuccessful) return; // Skip remaining if error occurred
 
-                // Check if valid data and dataset were retrieved
-                if (savedData?.dataset && typeof savedData.dataset === 'object' && Object.keys(savedData.dataset).length > 0) {
-                    console.log("DB Util: Found saved model data, processing entries...");
-
-                    const tensorsToSet = {};       // To hold the CLONED tensors for KNN
-                    const tensorsToDispose = [];   // To hold the ORIGINAL tensors created from arrays
-                    let processingSuccessful = true; // Flag to track if all tensors were processed ok
-
-                    // Iterate through the saved dataset entries (classIndex -> {data, shape})
-                    Object.entries(savedData.dataset).forEach(([classIndex, dataObj]) => {
-                        let originalTensor = null; // Tensor created directly from loaded data
-
-                        try {
-                            // Validate the data object for the current class
-                            if (dataObj?.data && Array.isArray(dataObj.data) && dataObj.shape && Array.isArray(dataObj.shape)) {
-                                // 1. Create the original tensor from the loaded array data and shape
-                                originalTensor = tf.tensor(dataObj.data, dataObj.shape);
-                                console.log(`   DB Util: Created original tensor for class ${classIndex}, isDisposed: ${originalTensor.isDisposed}, shape: ${originalTensor.shape}`);
-                                tensorsToDispose.push(originalTensor); // Add original to disposal list
-
-                                // 2. Clone the original tensor to create an independent copy
-                                tensorsToSet[classIndex] = originalTensor.clone();
-                                console.log(`   DB Util: Cloned tensor for class ${classIndex}, isDisposed: ${tensorsToSet[classIndex].isDisposed}, shape: ${tensorsToSet[classIndex].shape}`);
-
-                            } else {
-                                console.warn(`   DB Util: Invalid data or shape found for class ${classIndex}. Skipping.`);
-                                processingSuccessful = false; // Mark processing as failed if data is bad
+                            try {
+                                if (dataObj?.data && Array.isArray(dataObj.data) && dataObj.shape && Array.isArray(dataObj.shape)) {
+                                    // Create tensor directly from data
+                                    const loadedTensor = tf.tensor(dataObj.data, dataObj.shape);
+                                    // Store the tensor itself (KNN expects tensors). KNN manages its memory.
+                                    tensorsToSet[classIndex] = loadedTensor;
+                                    console.log(`   DB Util: Processed tensor for class ${classIndex}, Shape: ${loadedTensor.shape}`);
+                                } else {
+                                    console.warn(`   DB Util: Invalid data or shape for class ${classIndex}. Skipping.`);
+                                    processingSuccessful = false;
+                                }
+                            } catch (e) {
+                                console.error(`   DB Util: Error processing tensor for class ${classIndex}`, e);
+                                processingSuccessful = false;
                             }
-                        } catch (e) {
-                            // Catch errors during tensor creation or cloning
-                            console.error(`   DB Util: Error processing tensor for class ${classIndex}`, e);
-                            processingSuccessful = false;
-                            // Ensure partial tensor is disposed if error occurred during processing
-                            if (originalTensor && !originalTensor.isDisposed) {
-                                originalTensor.dispose();
+                        }); // End forEach
+
+                        // Only set dataset if processing was fully successful
+                        if (processingSuccessful && Object.keys(tensorsToSet).length > 0) {
+                             try {
+                                knnClassifierInstance.setClassifierDataset(tensorsToSet);
+                                console.log(`DB Util: KNN dataset successfully set with ${Object.keys(tensorsToSet).length} tensors.`);
+                                resolve(savedData.classCounts || {}); // Resolve with counts
+                            } catch (knnError) {
+                                 console.error("DB Util: Error calling knnClassifierInstance.setClassifierDataset:", knnError);
+                                 reject(new Error(`Failed to set KNN dataset: ${knnError.message}`)); // Reject on KNN set error
+                                 processingSuccessful = false; // Mark as failed
                             }
-                            // No need to dispose clone here as error likely happened before/during cloning
+                        } else if (!processingSuccessful) {
+                             console.warn("DB Util: Dataset processing failed. Not setting KNN dataset.");
+                             resolve({}); // Resolve empty, tensors handled by tidy
+                        } else {
+                             console.log("DB Util: No valid tensors processed from saved data.");
+                             resolve({}); // Resolve empty, tensors handled by tidy
                         }
-                    });
+                    }); // End tf.tidy
 
-                    // Check if processing was successful and at least one tensor was prepared
-                    if (Object.keys(tensorsToSet).length > 0 && processingSuccessful) {
-                        try {
-                            // 3. Set the dataset in the KNN instance using the CLONED tensors
-                            knnClassifierInstance.setClassifierDataset(tensorsToSet);
-                            console.log(`DB Util: KNN dataset successfully set using ${Object.keys(tensorsToSet).length} CLONED tensors.`);
+                    // If processing failed inside tidy but didn't reject, resolve empty here too
+                     if (!processingSuccessful) {
+                         resolve({});
+                     }
 
-                            // Resolve the promise with the loaded class counts
-                            resolve(savedData.classCounts || {});
+                 } else {
+                     console.log("DB Util: No valid saved model data structure found.");
+                     resolve({}); // Resolve with empty counts if no data
+                 }
+             }; // End onsuccess
 
-                        } catch (knnError) {
-                             console.error("DB Util: Error calling knnClassifierInstance.setClassifierDataset:", knnError);
-                             // Reject if setting the dataset fails
-                             reject(knnError);
-                        } finally {
-                             // 4. Dispose the ORIGINAL tensors created directly from data arrays
-                             //    The KNN instance now manages the clones.
-                             console.log(`DB Util: Disposing ${tensorsToDispose.length} original temporary tensors...`);
-                             tensorsToDispose.forEach(tensor => {
-                                 if (tensor && !tensor.isDisposed) {
-                                     tensor.dispose();
-                                 }
-                             });
-                              console.log("DB Util: Original temporary tensors disposed.");
-                        }
-                    } else {
-                        // Handle cases where processing failed or resulted in no valid tensors
-                        console.warn("DB Util: Dataset processing failed or resulted in no tensors to set.");
-                        // Ensure cleanup of any created tensors if processing failed
-                        tensorsToDispose.forEach(tensor => { if (tensor && !tensor.isDisposed) tensor.dispose(); });
-                        Object.values(tensorsToSet).forEach(tensor => { if (tensor && !tensor.isDisposed) tensor.dispose(); });
-                        resolve({}); // Resolve with empty counts if processing failed
-                    }
-                } else {
-                    // Handle case where no valid saved data was found in IndexedDB
-                    console.log("DB Util: No valid saved model data structure found in result.");
-                    resolve({}); // Resolve with empty counts
-                }
-            };
+             getRequest.onerror = (e) => {
+                 console.error("DB Util: Error executing getRequest loading saved model:", e.target.error);
+                 reject(new Error(`Failed to load model data: ${e.target.error?.message}`)); // Reject on error
+             };
 
-            // Handle errors during the IndexedDB get request
-            getRequest.onerror = (e) => {
-                console.error("DB Util: Error executing getRequest loading saved model:", e.target.error);
-                reject(e.target.error); // Reject the promise on error
-            };
+             transaction.oncomplete = () => console.log("DB Util: Load model read transaction complete.");
+             transaction.onerror = (e) => console.error("DB Util: Load model read transaction error:", e.target.error); // Log, but let request handle reject
 
-            // Optional: Handle transaction completion and errors
-            transaction.oncomplete = () => {
-                console.log("DB Util: Load model read transaction complete.");
-            };
-            transaction.onerror = (e) => {
-                // Don't necessarily reject here, as getRequest.onerror should handle the primary failure
-                console.error("DB Util: Load model read transaction error:", e.target.error);
-            };
-        });
+         }); // End Promise
 
-    } catch (err) {
-        // Catch errors during the initial DB opening or transaction setup phase
-        console.error("DB Util: Error during loadGestureModel setup (e.g., opening DB):", err);
-        // Ensure promise resolves with empty object even if setup fails
-        return Promise.resolve({});
-    }
+     } catch (err) {
+         // Catch errors during DB open or transaction start
+         console.error("DB Util: Error during loadGestureModel setup:", err);
+         return Promise.resolve({}); // Resolve with empty object on setup failure
+     }
 }
+
+// Add any other DB utility functions here if needed

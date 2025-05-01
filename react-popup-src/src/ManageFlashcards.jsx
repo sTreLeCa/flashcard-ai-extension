@@ -1,38 +1,11 @@
 // react-popup-src/src/ManageFlashcards.jsx
 import React, { useState, useEffect, useCallback} from 'react';
 import ReviewFlashcards from './ReviewFlashcards'; // Import the review component
+import { openDB, STORE_NAME, DECKS_STORE_NAME, UNASSIGNED_DECK_ID } from './db.js'; // Assuming db.js is in the same src folder or adjust path
 
-// --- IndexedDB Logic (Version 2 - Complete, but duplicated - Should match App.jsx) ---
-// This section MUST be identical in App.jsx until refactored
-const DB_NAME = 'flashcardDB';
-const DB_VERSION = 4;
-const STORE_NAME = 'flashcards';
-const DECKS_STORE_NAME = 'decks';
-let dbPromise = null;
 
-function openDB() {
-    // --- V2 openDB function (same as provided previously for App.jsx) ---
-    if (dbPromise && dbPromise.readyState !== 'done') { return dbPromise; }
-    console.log(`Manage: Opening/Requesting DB: ${DB_NAME} v${DB_VERSION}`);
-    dbPromise = new Promise((resolve, reject) => {
-        if (typeof indexedDB === 'undefined') { return reject(new Error("IndexedDB not supported by this browser.")); }
-        const request = indexedDB.open(DB_NAME, DB_VERSION);
-        request.onupgradeneeded = (event) => {
-             const currentVersion = event.oldVersion; console.log(`Manage: DB upgrade needed from v${currentVersion} to v${DB_VERSION}.`);
-             const tempDb = event.target.result; const transaction = event.target.transaction;
-             if (!tempDb.objectStoreNames.contains(STORE_NAME)) {tempDb.createObjectStore(STORE_NAME, { keyPath: 'id', autoIncrement: true });console.log(`Manage: Created store ${STORE_NAME}`);}
-             if (currentVersion < 2) {
-                 if (!tempDb.objectStoreNames.contains(DECKS_STORE_NAME)) {tempDb.createObjectStore(DECKS_STORE_NAME, { keyPath: 'id', autoIncrement: true });console.log(`Manage: Created store ${DECKS_STORE_NAME}`);}
-                 if (transaction && transaction.objectStoreNames.contains(STORE_NAME)) { try { const fs = transaction.objectStore(STORE_NAME); if (!fs.indexNames.contains('deckIdIndex')) {fs.createIndex('deckIdIndex', 'deckId', { unique: false });console.log(`Manage: Created index deckIdIndex`);}} catch(e) { console.error("Manage: Error creating index", e); }} else {console.warn("Manage: Tx inactive for index add");}
-             }
-             console.log('Manage: DB upgrade finished.');
-        };
-        request.onsuccess=(e)=>{const db=e.target.result;console.log(`Manage: DB "${DB_NAME}" opened (v${db.version}).`);db.onerror=(errEvent)=>{console.error("Manage: DB error:",errEvent.target.error);dbPromise=null;};db.onclose=()=>{console.warn('Manage: DB closed.');dbPromise=null;};resolve(db);};
-        request.onerror=(e)=>{console.error("Manage: Error opening DB:",e.target.error);dbPromise=null;reject(e.target.error);};
-        request.onblocked=(e)=>{console.warn("Manage: DB open blocked.");dbPromise=null;reject(new Error("DB blocked"));}
-    });
-    return dbPromise;
-}
+
+
 // --- End DB Logic ---
 
 
