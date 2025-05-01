@@ -8,6 +8,9 @@
       "storage",   
       "scripting"  
     ],
+    "host_permissions": [
+    "https://tfhub.dev/*" 
+  ],
     "action": {
       "default_popup": "popup.html",
       "default_title": "Flashcard AI"

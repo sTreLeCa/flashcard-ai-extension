@@ -1,10 +1,11 @@
 // background.js
+// @ts-check
 console.log("Background service worker started.");
 
 let latestSelectedText = ""; // Variable to store the most recent selection
 
 // Listen for messages from content scripts or popup
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log("Message received in background:", message);
 
   if (message.type === "TEXT_SELECTED") {
