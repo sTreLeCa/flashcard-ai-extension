@@ -1,0 +1,11 @@
+// react-popup-src/tsconfig.node.json
+{
+    "compilerOptions": {
+      "composite": true, // Required for project references
+      "skipLibCheck": true, // Speeds up type checking by skipping declaration files
+      "module": "ESNext", // Use modern ECMAScript modules
+      "moduleResolution": "bundler", // Recommended module resolution for Vite/modern bundlers
+      "allowSyntheticDefaultImports": true // Allows default imports from modules without a default export
+    },
+    "include": ["vite.config.js"] // Specify which files this config applies to (usually just the Vite config)
+  }

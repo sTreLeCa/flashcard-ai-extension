@@ -1,0 +1,30 @@
+{
+    "compilerOptions": {
+      "target": "ES2020", // Target modern JavaScript
+      "useDefineForClassFields": true,
+      "lib": ["ES2020", "DOM", "DOM.Iterable"], // Include necessary JS libraries and DOM types
+      "module": "ESNext", // Let Vite handle module bundling
+      "skipLibCheck": true, // Skip type checking of declaration files (speeds up compile time)
+  
+      /* Bundler mode */
+      "moduleResolution": "bundler", // Recommended for Vite/modern bundlers
+      "allowImportingTsExtensions": true,
+      "resolveJsonModule": true,
+      "isolatedModules": true, // Ensure files can be transpiled independently
+      "noEmit": true, // TypeScript won't output JS; Vite handles this
+      "jsx": "react-jsx", // Use the modern JSX transform
+  
+      /* Linting */
+      "strict": true, // Enable all strict type-checking options (HIGHLY recommended)
+      "noUnusedLocals": true,
+      "noUnusedParameters": true,
+      "noFallthroughCasesInSwitch": true,
+      "forceConsistentCasingInFileNames": true, // Prevent case sensitivity issues
+  
+      /* Added for better compatibility */
+      "esModuleInterop": true, // Enables smoother interop between CommonJS and ES Modules
+      "allowSyntheticDefaultImports": true // Allows default imports from modules with no default export
+    },
+    "include": ["src"], // Only process files in the src directory
+    "references": [{ "path": "./tsconfig.node.json" }] // Standard for Vite setups
+  }
